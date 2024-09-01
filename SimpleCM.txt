@@ -1,0 +1,63 @@
+ALTER PROCEDURE dbo.LoadMatchingDataToStaging
+(
+    @SourceSchema NVARCHAR(128),
+    @SourceTable NVARCHAR(128),
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128),
+    @StagingSchema NVARCHAR(128),
+    @StagingTable NVARCHAR(128),
+    @JoinCondition NVARCHAR(MAX)
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @DynamicSQL NVARCHAR(MAX);
+    DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
+    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @StagingTableName NVARCHAR(256) = QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable);
+
+    -- Step 1: Dynamically load column names from the source table
+    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = @SourceTable 
+    AND TABLE_SCHEMA = @SourceSchema;
+
+    -- For debugging: Print the dynamic SQL for column names
+    PRINT 'Column Names: ' + @ColumnNames;
+
+    -- Step 2: Drop the staging table if it already exists
+    SET @DynamicSQL = 'IF OBJECT_ID(''' + @StagingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @StagingTableName + ';';
+    EXEC sp_executesql @DynamicSQL;
+
+    -- Step 3: Create the staging table dynamically with the same schema as the source table
+    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @StagingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
+    EXEC sp_executesql @DynamicSQL;
+
+    -- For debugging: Print the dynamic SQL for creating the staging table
+    PRINT 'Create Staging Table SQL: ' + @DynamicSQL;
+
+    -- Step 4: Insert matching records into the staging table
+    SET @DynamicSQL = '
+        INSERT INTO ' + @StagingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
+        SELECT ' + @ColumnNames + '
+        FROM ' + @SourceTableName + ' AS src
+        JOIN ' + @MappingTableName + ' AS map
+        ON ' + @JoinCondition + ';';
+
+    -- For debugging: Print the dynamic SQL for inserting data
+    PRINT 'Insert SQL: ' + @DynamicSQL;
+
+    -- Execute the dynamic SQL to insert the matching data
+    EXEC sp_executesql @DynamicSQL;
+END;
+
+EXEC dbo.LoadMatchingDataToStaging 
+    @SourceSchema = 'Landing',
+    @SourceTable = 'Central_Orders',
+    @MappingSchema = 'Mapping',
+    @MappingTable = 'Central_Orders',
+    @StagingSchema = 'Staging',
+    @StagingTable = 'Central_Orders',
+    @JoinCondition = 'src.Row_ID = map.Row_ID AND LOWER(src.Region) = LOWER(map.Region)';
