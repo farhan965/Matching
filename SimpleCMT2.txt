@@ -31,9 +31,13 @@ BEGIN
 
     -- Step 2: Drop the staging and non-matching tables if they already exist
     SET @DynamicSQL = 'IF OBJECT_ID(''' + @StagingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @StagingTableName + ';';
+     -- For debugging: Print the dynamic SQL for dropping the existing matching table
+	PRINT 'Dropping Existing  Matching Table:' +  @DynamicSQL;
     EXEC sp_executesql @DynamicSQL;
 
     SET @DynamicSQL = 'IF OBJECT_ID(''' + @NonMatchingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @NonMatchingTableName + ';';
+    -- For debugging: Print the dynamic SQL for dropping the existing Non matching table
+	PRINT 'Dropping Existing Non  Matching Table:' + @DynamicSQL;
     EXEC sp_executesql @DynamicSQL;
 
     -- Step 3: Create the staging table dynamically with the same schema as the source table
