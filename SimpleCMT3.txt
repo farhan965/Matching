@@ -73,7 +73,7 @@ BEGIN
         INSERT INTO ' + @StagingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
         SELECT ' + @ColumnNames + '
         FROM ' + @SourceTableName + ' AS src' +  ' '+
-		'WHERE src.Region in (select distinct region from' + @MappingTableName + ');'
+		'WHERE src.Region in (select distinct LOWER(region) from' + @MappingTableName + ');';
 
     -- For debugging: Print the dynamic SQL for inserting matching data
     PRINT 'Insert Matching Records SQL: ' + @DynamicSQL;
@@ -85,7 +85,7 @@ BEGIN
         INSERT INTO ' + @NonMatchingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
         SELECT ' + @ColumnNames + '
         FROM ' + @SourceTableName + ' AS src'+ ' '+
-        + 'WHERE src.Region not in (select distinct region from' + @MappingTableName +');'
+        + 'WHERE src.Region not in (select distinct LOWER(region) from' + @MappingTableName +');';
 
     -- For debugging: Print the dynamic SQL for inserting non-matching data
     PRINT 'Insert Non-Matching Records SQL: ' + @DynamicSQL;
@@ -93,6 +93,8 @@ BEGIN
     EXEC sp_executesql @DynamicSQL;
 END;
 GO
+
+
 
 
 
