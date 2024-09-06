@@ -1,7 +1,7 @@
 
 
 
-CREATE PROCEDURE [dbo].[LoadMatchingDataToStaging]
+CREATE PROCEDURE [dbo].[LoadMatchingData]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
@@ -69,7 +69,7 @@ BEGIN
         INSERT INTO ' + @MatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
         SELECT ' + @ColumnNames + '
         FROM ' + @SourceTableName + ' AS src' +  ' '+
-		'WHERE LOWER(src.[FA-PM Email]) in (select distinct LOWER(Email) from' + @MappingTableName + ');';
+		'WHERE LOWER(src.[Region]) in (select distinct LOWER(Region) from' + @MappingTableName + ');';
 
     -- For debugging: Print the dynamic SQL for inserting matching data
     PRINT 'Insert Matching Records SQL: ' + @DynamicSQL;
@@ -81,7 +81,7 @@ BEGIN
         INSERT INTO ' + @NonMatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
         SELECT ' + @ColumnNames + '
         FROM ' + @SourceTableName + ' AS src'+ ' '+
-        + 'WHERE LOWER(src.[FA-PM Email]) not in (select distinct LOWER(Email) from' + @MappingTableName +');';
+        + 'WHERE LOWER(src.[Region]) not in (select distinct LOWER(Region) from' + @MappingTableName +');';
 
     -- For debugging: Print the dynamic SQL for inserting non-matching data
     PRINT 'Insert Non-Matching Records SQL: ' + @DynamicSQL;
