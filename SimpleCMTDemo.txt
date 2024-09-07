@@ -1,16 +1,5 @@
-USE [Matching]
-GO
 
-/****** Object:  StoredProcedure [dbo].[LoadMatchingDataToStaging]    Script Date: 9/2/2024 9:48:19 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
-
-
-ALTER PROCEDURE [dbo].[LoadMatchingDataToStagingDemo]
+CREATE PROCEDURE [dbo].[LoadMatchingDataToStaging]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
@@ -39,21 +28,27 @@ BEGIN
 
     -- For debugging: Print the dynamic SQL for column names
     PRINT 'Column Names: ' + @ColumnNames;
+	
+	DECLARE @MatchingTB nvarchar(max) = QUOTENAME(@StagingTableName + '_OUTPUT_T')
 
-    -- Step 2: Drop the staging and non-matching tables if they already exist
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @StagingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @StagingTableName + ';';
+    -- Step 2: Drop the Matching or staging and non-matching tables if they already exist
+    SET @DynamicSQL = 'IF OBJECT_ID(''' + @MatchingTB + ''', ''U'') IS NOT NULL DROP TABLE ' + @MatchingTB + ';';
     -- For debugging: Print the dynamic SQL for dropping the existing matching table
 	PRINT 'Dropping Existing  Matching Table:' +  @DynamicSQL;
 	EXEC sp_executesql @DynamicSQL;
 	
-
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @NonMatchingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @NonMatchingTableName + ';';
+    
+	
+	DECLARE @NonMatchingTB nvarchar(max) = QUOTENAME(@NonMatchingTableName + '_OUTPUT_F')
+	
+    SET @DynamicSQL = 'IF OBJECT_ID(''' + @NonMatchingTB + ''', ''U'') IS NOT NULL DROP TABLE ' + @NonMatchingTB + ';';
     -- For debugging: Print the dynamic SQL for dropping the existing Non matching table
 	PRINT 'Dropping Existing Non Matching Table:' + @DynamicSQL;
 	EXEC sp_executesql @DynamicSQL;
 
-    -- Step 3: Create the staging table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @StagingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
+	-- Step 3: Create the staging table dynamically with the same schema as the source table, including an additional id column
+	SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ', NULL AS id INTO ' + @MatchingTB + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
+
     
     -- For debugging: Print the dynamic SQL for creating the staging table
     PRINT 'Create Staging Table SQL: ' + @DynamicSQL;
@@ -61,7 +56,7 @@ BEGIN
     EXEC sp_executesql @DynamicSQL;
 
     -- Step 4: Create the non-matching table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @NonMatchingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
+    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @NonMatchingTB + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
     
     -- For debugging: Print the dynamic SQL for creating the non-matching table
     PRINT 'Create Non-Matching Table SQL: ' + @DynamicSQL;
@@ -69,11 +64,18 @@ BEGIN
     EXEC sp_executesql @DynamicSQL;
 
     -- Step 5: Insert matching records into the staging table
-    SET @DynamicSQL = '
-    INSERT INTO ' + @StagingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-    SELECT ' + @ColumnNames + '
-    FROM ' + @SourceTableName + ' AS src' + ' '+
-    'WHERE src.Ship_Mode IN (''First Class'', ''Standard Class'');';
+	SET @DynamicSQL = '
+		INSERT INTO ' + @MatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ', id)
+		SELECT ' + @ColumnNames + ', map.id
+		FROM ' + @SourceTableName + ' AS src
+		LEFT JOIN ' + @MappingTableName + ' AS map
+		ON LOWER(src.[FA-PM Email]) = LOWER(map.Email)
+		WHERE LOWER(src.[FA-PM Email]) IN (
+			SELECT DISTINCT LOWER(Email) 
+			FROM ' + @MappingTableName + '
+			UNION ALL
+			SELECT NULL
+		);';
 
 
     -- For debugging: Print the dynamic SQL for inserting matching data
@@ -82,26 +84,19 @@ BEGIN
     EXEC sp_executesql @DynamicSQL;
 
     -- Step 6: Insert non-matching records into the non-matching table
-    SET @DynamicSQL = '
-        INSERT INTO ' + @NonMatchingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-        SELECT ' + @ColumnNames + '
-        FROM ' + @SourceTableName + ' AS src'+ ' '+
-        'WHERE src.Ship_Mode NOT IN (''First Class'', ''Standard Class'');';
+	SET @DynamicSQL = '
+		INSERT INTO ' + @NonMatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
+		SELECT ' + @ColumnNames + '
+		FROM ' + @SourceTableName + ' AS src
+		WHERE LOWER(src.[FA-PM Email]) NOT IN (
+			SELECT DISTINCT LOWER(Email) 
+			FROM ' + @MappingTableName + '
+			UNION ALL
+			SELECT NULL  
+		);'; -- will handel null values as well
 
     -- For debugging: Print the dynamic SQL for inserting non-matching data
     PRINT 'Insert Non-Matching Records SQL: ' + @DynamicSQL;
 
     EXEC sp_executesql @DynamicSQL;
 END;
-GO
-
-
-
-EXEC dbo.LoadMatchingDataToStagingDemo 
-    @SourceSchema = 'Landing',
-    @SourceTable = 'Central_Orders',
-    @MappingSchema = 'Mapping',
-    @MappingTable = 'Central_Orders',
-    @StagingSchema = 'Staging',
-    @StagingTable = 'Central_Orders',
-    @NonMatchingSchema = 'NonMatching';
