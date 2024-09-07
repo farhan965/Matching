@@ -1,12 +1,10 @@
-ALTER PROCEDURE dbo.LoadMatchingDataToStaging
+ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
     @MappingTable NVARCHAR(128),
-    @StagingSchema NVARCHAR(128),
-    @StagingTable NVARCHAR(128),
-    @JoinCondition NVARCHAR(MAX)
+    @NewTable NVARCHAR(128)  -- Parameter to provide a new table name
 )
 AS
 BEGIN
@@ -16,7 +14,9 @@ BEGIN
     DECLARE @ColumnNames NVARCHAR(MAX);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @StagingTableName NVARCHAR(256) = QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@NewTable + '_T');
+	DECLARE @DropSourceTableSQL NVARCHAR(MAX);
+	DECLARE @RenameTableSQL NVARCHAR(MAX);
 
     -- Step 1: Dynamically load column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
@@ -27,37 +27,45 @@ BEGIN
     -- For debugging: Print the dynamic SQL for column names
     PRINT 'Column Names: ' + @ColumnNames;
 
-    -- Step 2: Drop the staging table if it already exists
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @StagingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @StagingTableName + ';';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 3: Create the staging table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @StagingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- For debugging: Print the dynamic SQL for creating the staging table
-    PRINT 'Create Staging Table SQL: ' + @DynamicSQL;
-
-    -- Step 4: Insert matching records into the staging table
+    -- Step 2: Create a CTE to perform the operations
     SET @DynamicSQL = '
-        INSERT INTO ' + @StagingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-        SELECT ' + @ColumnNames + '
-        FROM ' + @SourceTableName + ' AS src
-        JOIN ' + @MappingTableName + ' AS map
-        ON ' + @JoinCondition + ';';
+    WITH 
+    CTE AS
+    (
+        SELECT ' + @ColumnNames + ',
+            CASE 
+                WHEN LOWER(src.[Customer_Name]) IN (SELECT DISTINCT LOWER(map.Customer_Name) FROM ' + @MappingTableName + ')
+                     OR LOWER(src.[Customer_Name]) IN (SELECT DISTINCT LOWER(map.Customer) FROM ' + @MappingTableName + ') THEN ''Y''
+                ELSE ''N''
+            END AS status,
+            CASE 
+                WHEN LOWER(src.[Customer_Name]) IN (SELECT DISTINCT LOWER(map.Customer_Name) FROM ' + @MappingTableName + ')
+                     OR LOWER(src.[Customer_Name]) IN (SELECT DISTINCT LOWER(map.Customer) FROM ' + @MappingTableName + ') THEN GETDATE()
+                ELSE NULL
+            END AS InsertDataTime,
+			map.Order_ID as OD
+    FROM ' + @SourceTableName + ' AS src
+    LEFT JOIN ' + @MappingTableName + ' AS map
+    ON LOWER(src.[Customer_Name]) = LOWER(map.Customer_Name))
+        
+   
+    -- Step 3: Create the new table from the CTE
+    SELECT * INTO ' + @NewTableName + ' FROM CTE;';
 
-    -- For debugging: Print the dynamic SQL for inserting data
-    PRINT 'Insert SQL: ' + @DynamicSQL;
-
-    -- Execute the dynamic SQL to insert the matching data
+    -- Execute the dynamic SQL
     EXEC sp_executesql @DynamicSQL;
-END;
 
-EXEC dbo.LoadMatchingDataToStaging 
-    @SourceSchema = 'Landing',
-    @SourceTable = 'Central_Orders',
-    @MappingSchema = 'Mapping',
-    @MappingTable = 'Central_Orders',
-    @StagingSchema = 'Staging',
-    @StagingTable = 'Central_Orders',
-    @JoinCondition = 'src.Row_ID = map.Row_ID AND LOWER(src.Region) = LOWER(map.Region)';
+    -- For debugging: Print the dynamic SQL for table creation
+    PRINT 'Dynamic SQL executed to create table: ' + @NewTable;
+
+	 -- Step 4: Drop the old source table
+    SET @DropSourceTableSQL = 'DROP TABLE IF EXISTS ' + @SourceTableName + ';';
+    EXEC sp_executesql @DropSourceTableSQL;
+
+	 -- Step 5: Rename the new table to the original source table name
+    SET @RenameTableSQL = 'EXEC sp_rename ''' + @NewTableName + ''', ''' + @SourceTable + ''';';
+    EXEC sp_executesql @RenameTableSQL;
+END;
+GO
+
+
