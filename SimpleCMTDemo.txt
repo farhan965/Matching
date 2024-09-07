@@ -3,10 +3,7 @@ CREATE PROCEDURE [dbo].[LoadMatchingDataToStaging]
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128),
-    @StagingSchema NVARCHAR(128),
-    @StagingTable NVARCHAR(128),
-    @NonMatchingSchema NVARCHAR(128)
+    @MappingTable NVARCHAR(128)
 )
 AS
 BEGIN
@@ -16,18 +13,20 @@ BEGIN
     DECLARE @ColumnNames NVARCHAR(MAX);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @StagingTableName NVARCHAR(256) = QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable);
-    
+
     -- Step 1: Dynamically load column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = @SourceTable 
     AND TABLE_SCHEMA = @SourceSchema;
 
-    -- Step 2: Create the view dynamically by selecting from the source table
+    -- For debugging: Print the dynamic SQL for column names
+    PRINT 'Column Names: ' + @ColumnNames;
+
+    -- Step 2: Create a temporary view by selecting from the source table
     -- and adding status, InsertDataTime, and id as additional columns
     SET @DynamicSQL = '
-    CREATE VIEW ' + QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable) + ' AS
+    CREATE VIEW #temp_view AS
     SELECT ' + @ColumnNames + ',
         CASE 
             WHEN LOWER(src.[FA-PM Email]) = LOWER(map.Email) THEN ''Y''
@@ -42,12 +41,12 @@ BEGIN
     LEFT JOIN ' + @MappingTableName + ' AS map
     ON LOWER(src.[FA-PM Email]) = LOWER(map.Email);';
 
-    -- Step 3: Execute the dynamic SQL to create the view
+    -- Step 3: Execute the dynamic SQL to create the temporary view
     EXEC sp_executesql @DynamicSQL;
 
     -- For debugging: Print the dynamic SQL for the view creation
     PRINT @DynamicSQL;
-    
+
     -- Step 4: Drop the original source table
     SET @DynamicSQL = 'DROP TABLE ' + @SourceTableName + ';';
     EXEC sp_executesql @DynamicSQL;
@@ -55,12 +54,18 @@ BEGIN
     -- For debugging: Print the dynamic SQL for the table drop
     PRINT 'Dropped Table: ' + @SourceTableName;
 
-    -- Step 5: Create the new table with data from the view
-    -- Create the new table from the view, essentially replacing the source table
-    SET @DynamicSQL = 'SELECT * INTO ' + @SourceTableName + ' FROM ' + @StagingTableName + ';';
+    -- Step 5: Create the new table from the temporary view
+    SET @DynamicSQL = 'SELECT * INTO ' + @SourceTableName + ' FROM #temp_view;';
     EXEC sp_executesql @DynamicSQL;
 
     -- For debugging: Print the dynamic SQL for overwriting the source table
-    PRINT 'Recreated Table: ' + @SourceTableName + ' from view: ' + @StagingTableName;
+    PRINT 'Recreated Table: ' + @SourceTableName + ' from temporary view';
+
+    -- Clean up by dropping the temporary view
+    SET @DynamicSQL = 'DROP VIEW #temp_view;';
+    EXEC sp_executesql @DynamicSQL;
+
+    -- For debugging: Print the dynamic SQL for dropping the temporary view
+    PRINT 'Dropped temporary view';
     
 END;
