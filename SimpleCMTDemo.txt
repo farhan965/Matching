@@ -1,4 +1,3 @@
-
 CREATE PROCEDURE [dbo].[LoadMatchingDataToStaging]
 (
     @SourceSchema NVARCHAR(128),
@@ -18,85 +17,50 @@ BEGIN
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
     DECLARE @StagingTableName NVARCHAR(256) = QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable);
-    DECLARE @NonMatchingTableName NVARCHAR(256) = QUOTENAME(@NonMatchingSchema) + '.' + QUOTENAME(@StagingTable);
-
+    
     -- Step 1: Dynamically load column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = @SourceTable 
     AND TABLE_SCHEMA = @SourceSchema;
 
-    -- For debugging: Print the dynamic SQL for column names
-    PRINT 'Column Names: ' + @ColumnNames;
-	
-	DECLARE @MatchingTB nvarchar(max) = QUOTENAME(@StagingTableName + '_OUTPUT_T')
+    -- Step 2: Create the view dynamically by selecting from the source table
+    -- and adding status, InsertDataTime, and id as additional columns
+    SET @DynamicSQL = '
+    CREATE VIEW ' + QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable) + ' AS
+    SELECT ' + @ColumnNames + ',
+        CASE 
+            WHEN LOWER(src.[FA-PM Email]) = LOWER(map.Email) THEN ''Y''
+            ELSE ''N''
+        END AS status,
+        CASE 
+            WHEN LOWER(src.[FA-PM Email]) = LOWER(map.Email) THEN GETDATE()
+            ELSE NULL
+        END AS InsertDataTime,
+        map.id
+    FROM ' + @SourceTableName + ' AS src
+    LEFT JOIN ' + @MappingTableName + ' AS map
+    ON LOWER(src.[FA-PM Email]) = LOWER(map.Email);';
 
-    -- Step 2: Drop the Matching or staging and non-matching tables if they already exist
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @MatchingTB + ''', ''U'') IS NOT NULL DROP TABLE ' + @MatchingTB + ';';
-    -- For debugging: Print the dynamic SQL for dropping the existing matching table
-	PRINT 'Dropping Existing  Matching Table:' +  @DynamicSQL;
-	EXEC sp_executesql @DynamicSQL;
-	
-    
-	
-	DECLARE @NonMatchingTB nvarchar(max) = QUOTENAME(@NonMatchingTableName + '_OUTPUT_F')
-	
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @NonMatchingTB + ''', ''U'') IS NOT NULL DROP TABLE ' + @NonMatchingTB + ';';
-    -- For debugging: Print the dynamic SQL for dropping the existing Non matching table
-	PRINT 'Dropping Existing Non Matching Table:' + @DynamicSQL;
-	EXEC sp_executesql @DynamicSQL;
-
-	-- Step 3: Create the staging table dynamically with the same schema as the source table, including an additional id column
-	SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ', NULL AS id INTO ' + @MatchingTB + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
-
-    
-    -- For debugging: Print the dynamic SQL for creating the staging table
-    PRINT 'Create Staging Table SQL: ' + @DynamicSQL;
-    
+    -- Step 3: Execute the dynamic SQL to create the view
     EXEC sp_executesql @DynamicSQL;
 
-    -- Step 4: Create the non-matching table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @NonMatchingTB + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
+    -- For debugging: Print the dynamic SQL for the view creation
+    PRINT @DynamicSQL;
     
-    -- For debugging: Print the dynamic SQL for creating the non-matching table
-    PRINT 'Create Non-Matching Table SQL: ' + @DynamicSQL;
+    -- Step 4: Drop the original source table
+    SET @DynamicSQL = 'DROP TABLE ' + @SourceTableName + ';';
+    EXEC sp_executesql @DynamicSQL;
+
+    -- For debugging: Print the dynamic SQL for the table drop
+    PRINT 'Dropped Table: ' + @SourceTableName;
+
+    -- Step 5: Create the new table with data from the view
+    -- Create the new table from the view, essentially replacing the source table
+    SET @DynamicSQL = 'SELECT * INTO ' + @SourceTableName + ' FROM ' + @StagingTableName + ';';
+    EXEC sp_executesql @DynamicSQL;
+
+    -- For debugging: Print the dynamic SQL for overwriting the source table
+    PRINT 'Recreated Table: ' + @SourceTableName + ' from view: ' + @StagingTableName;
     
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 5: Insert matching records into the staging table
-	SET @DynamicSQL = '
-		INSERT INTO ' + @MatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ', id)
-		SELECT ' + @ColumnNames + ', map.id
-		FROM ' + @SourceTableName + ' AS src
-		LEFT JOIN ' + @MappingTableName + ' AS map
-		ON LOWER(src.[FA-PM Email]) = LOWER(map.Email)
-		WHERE LOWER(src.[FA-PM Email]) IN (
-			SELECT DISTINCT LOWER(Email) 
-			FROM ' + @MappingTableName + '
-			UNION ALL
-			SELECT NULL
-		);';
-
-
-    -- For debugging: Print the dynamic SQL for inserting matching data
-    PRINT 'Insert Matching Records SQL: ' + @DynamicSQL;
-
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 6: Insert non-matching records into the non-matching table
-	SET @DynamicSQL = '
-		INSERT INTO ' + @NonMatchingTB + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-		SELECT ' + @ColumnNames + '
-		FROM ' + @SourceTableName + ' AS src
-		WHERE LOWER(src.[FA-PM Email]) NOT IN (
-			SELECT DISTINCT LOWER(Email) 
-			FROM ' + @MappingTableName + '
-			UNION ALL
-			SELECT NULL  
-		);'; -- will handel null values as well
-
-    -- For debugging: Print the dynamic SQL for inserting non-matching data
-    PRINT 'Insert Non-Matching Records SQL: ' + @DynamicSQL;
-
-    EXEC sp_executesql @DynamicSQL;
 END;
