@@ -69,3 +69,11 @@ END;
 GO
 
 
+EXEC [dbo].[LoadMatchingDataToStaging] 
+
+    @SourceSchema='Landing',
+    @SourceTable='test',
+    @MappingSchema='Landing',
+    @MappingTable='East_Orders',
+    @NewTable='test'
+
