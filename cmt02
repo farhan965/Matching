@@ -50,13 +50,13 @@ BEGIN
         SET @UpdateSQL = '
         UPDATE ' + @SourceTableName + ' SET 
             status = CASE 
-                        WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ' AS map)
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
+                        WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
                         ELSE ''N''
                      END,
             InsertDataTime = CASE 
-                                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ' AS map)
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
+                                WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
                                 ELSE NULL
                              END
         FROM ' + @SourceTableName + ' AS src;';
@@ -72,13 +72,13 @@ BEGIN
         SET @UpdateSQL = '
         UPDATE ' + @SourceTableName + ' SET 
             status = CASE 
-                         WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ' AS map)
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
+                         WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
                         ELSE ''N''
                      END,
             InsertDataTime = CASE 
-                                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ' AS map)
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
+                                WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
                                 ELSE NULL
                              END
         WHERE status IS NULL AND InsertDataTime IS NULL AND asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ');
