@@ -1,13 +1,17 @@
+
 ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
 (
     @SourceSchema NVARCHAR(128),
-    @SourceTable NVARCHAR(128)
+    @SourceTable NVARCHAR(128),
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128)
 )
 AS
 BEGIN
     SET NOCOUNT ON;
 
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
+    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
     DECLARE @ColumnExists BIT;
 
     -- Step 1: Check if the source table exists in the database
@@ -40,47 +44,42 @@ BEGIN
             InsertDataTime DATETIME NULL, 
             OD NVARCHAR(50) NULL;';
         EXEC sp_executesql @AlterTableSQL;
-	
 
         -- Step 4: Update the newly added columns based on the required case statements
         DECLARE @UpdateSQL NVARCHAR(MAX);
         SET @UpdateSQL = '
-        UPDATE ' + @SourceTableName + '
-        SET 
+        UPDATE ' + @SourceTableName + ' SET 
             status = CASE 
-                        WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ')
-                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomer ) FROM ' + @MappingTableName THEN ''Y''
+                        WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomer) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
                         ELSE ''N''
                      END,
             InsertDataTime = CASE 
-                                WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ')
-                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomer) FROM ' + @MappingTableName + ') THEN GETDATE()
+                                WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
+                     OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomer) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
                                 ELSE NULL
-                             END;';
+                             END
+        FROM ' + @SourceTableName + ' AS src;';
         EXEC sp_executesql @UpdateSQL;
 
         -- For debugging: Print the dynamic SQL for updating the table
-        PRINT 'Columns status, InsertDataTime, added and updated in table ' + @SourceTableName;
+        PRINT 'Columns status, InsertDataTime added and updated in table ' + @SourceTableName;
     END
     ELSE
     BEGIN
         -- Step 5: If the columns exist, update them where they are NULL and asofdate is max
         DECLARE @UpdateSQL NVARCHAR(MAX);
         SET @UpdateSQL = '
-       
-        UPDATE @SourceTableName
-        SET 
+        UPDATE ' + @SourceTableName + ' SET 
             status = CASE 
-                        WHEN status IS NULL and asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ')  THEN ''Y''
+                        WHEN status IS NULL AND asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ') THEN ''Y''
                         ELSE status
                      END,
             InsertDataTime = CASE 
-                                WHEN status IS NULL and asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ')  InsertDataTime IS NULL THEN GETDATE()
+                                WHEN status IS NULL AND asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ') THEN GETDATE()
                                 ELSE InsertDataTime
                              END
-            
-                 
-        ';
+        WHERE status IS NULL AND InsertDataTime IS NULL;';
         
         EXEC sp_executesql @UpdateSQL;
 
