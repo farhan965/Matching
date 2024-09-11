@@ -80,4 +80,20 @@ BEGIN
 END;
 GO
 
+-----DML-----
+
+UPDATE src SET 
+            src.status = CASE 
+                            WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM SalesforcePW.Contact AS map)
+                             OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c  ) FROM SalesforcePW.Contact AS map) THEN 'Y'
+                            ELSE 'N'
+                         END,
+            src.InsertDataTime = CASE 
+                                    WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM SalesforcePW.Contact AS map)
+                             OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c  ) FROM SalesforcePW.Contact AS map) THEN GETDATE()
+                                    ELSE NULL
+                                 END
+        FROM [DataKit].[test_Orent_Orders] AS src
+        WHERE src.status IS NULL AND src.InsertDataTime IS NULL AND src.AsOfDate = (SELECT MAX(AsOfDate) FROM [DataKit].[test_Orent_Orders]);
+
 
