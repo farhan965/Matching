@@ -1,10 +1,21 @@
+USE [SalesStaging]
+GO
+
+/****** Object:  StoredProcedure [dbo].[LoadMatchingDataToStaging]    Script Date: 9/10/2024 10:30:39 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
 
 ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128)
+    @MappingTable NVARCHAR(128),
+    @NewTable NVARCHAR(128)  -- Parameter to provide a new table name
 )
 AS
 BEGIN
@@ -14,6 +25,9 @@ BEGIN
     DECLARE @ColumnNames NVARCHAR(MAX);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@NewTable + '_T');
+	DECLARE @DropSourceTableSQL NVARCHAR(MAX);
+	DECLARE @RenameTableSQL NVARCHAR(MAX);
 
     -- Step 1: Dynamically load column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
@@ -24,58 +38,46 @@ BEGIN
     -- For debugging: Print the dynamic SQL for column names
     PRINT 'Column Names: ' + @ColumnNames;
 
-    -- Step 2: Create a temporary view by selecting from the source table
-    -- and adding status, InsertDataTime, and id as additional columns
+    -- Step 2: Create a CTE to perform the operations
     SET @DynamicSQL = '
-    CREATE VIEW Tempview AS
-    SELECT ' + @ColumnNames + ',
-        CASE 
-            WHEN LOWER(src.[FA-PM Email]) = LOWER(map.Email) THEN ''Y''
-            ELSE ''N''
-        END AS status,
-        CASE 
-            WHEN LOWER(src.[FA-PM Email]) = LOWER(map.Email) THEN GETDATE()
-            ELSE NULL
-        END AS InsertDataTime,
-        map.id
+    WITH 
+    CTE AS
+    (
+        SELECT ' + @ColumnNames + ',
+            CASE 
+                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ')
+                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ') THEN ''Y''
+                ELSE ''N''
+            END AS status,
+            CASE 
+                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ')
+                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ') THEN GETDATE()
+                ELSE NULL
+            END AS InsertDataTime,
+			map.Id as OD
     FROM ' + @SourceTableName + ' AS src
     LEFT JOIN ' + @MappingTableName + ' AS map
-    ON LOWER(src.[FA-PM Email]) in (SELECT DISTINCT LOWER(Email) from' + @MappingTableName+');';
+    ON (LOWER(src.[FA-PM Email]) = LOWER(map.Email)) OR (LOWER(src.[FA-PM Email]) = LOWER(map.Secondary_Email__c)))
+	
+        
+   
+    -- Step 3: Create the new table from the CTE
+    SELECT * INTO ' + @NewTableName + ' FROM CTE;';
 
-    -- Step 3: Execute the dynamic SQL to create the temporary view
+    -- Execute the dynamic SQL
     EXEC sp_executesql @DynamicSQL;
 
-    -- For debugging: Print the dynamic SQL for the view creation
-    PRINT @DynamicSQL;
+    -- For debugging: Print the dynamic SQL for table creation
+    PRINT 'Dynamic SQL executed to create table: ' + @NewTable;
 
-    -- Step 4: Drop the original source table
-    SET @DynamicSQL = 'DROP TABLE ' + @SourceTableName + ';';
-    EXEC sp_executesql @DynamicSQL;
+	 -- Step 4: Drop the old source table
+    SET @DropSourceTableSQL = 'DROP TABLE IF EXISTS ' + @SourceTableName + ';';
+    EXEC sp_executesql @DropSourceTableSQL;
 
-    -- For debugging: Print the dynamic SQL for the table drop
-    --PRINT 'Dropped Table: ' + @SourceTableName;
-
-    -- Step 5: Create the new table from the temporary view
-    SET @DynamicSQL = 'SELECT * INTO ' + @SourceTableName + ' FROM Tempview;';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- For debugging: Print the dynamic SQL for overwriting the source table
-    --PRINT 'Recreated Table: ' + @SourceTableName + ' from temporary view';
-
-    -- Clean up by dropping the temporary view
-    --SET @DynamicSQL = 'DROP VIEW temp_view;';
-    --EXEC sp_executesql @DynamicSQL;
-
-    -- For debugging: Print the dynamic SQL for dropping the temporary view
-    --PRINT 'Dropped temporary view';
-    
+	 -- Step 5: Rename the new table to the original source table name
+    SET @RenameTableSQL = 'EXEC sp_rename ''' + @NewTableName + ''', ''' + @SourceTable + ''';';
+    EXEC sp_executesql @RenameTableSQL;
 END;
 GO
 
 
-----ERROR-----
-
-Msg 208, Level 16, State 1, Procedure Tempview, Line 13 [Batch Start Line 0]
-Invalid object name 'Datakit.Test_Orent'.
-Msg 4413, Level 16, State 1, Line 1
-Could not use view or function 'Tempview' because of binding errors.
