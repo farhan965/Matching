@@ -97,3 +97,41 @@ UPDATE src SET
         WHERE src.status IS NULL AND src.InsertDataTime IS NULL AND src.AsOfDate = (SELECT MAX(AsOfDate) FROM [DataKit].[test_Orent_Orders]);
 
 
+-------
+
+WITH MaxDateCTE AS (
+    -- Select the most recent record for each Customer_New_ID or Secondary_ID
+    SELECT
+        Customer_New_ID,
+        Secondary_ID,
+        MAX(LastUpdatedDate) AS MaxLastUpdatedDate
+    FROM
+        Customer_Details
+    GROUP BY
+        Customer_New_ID, Secondary_ID
+)
+SELECT 
+    c.CustomerID,
+    cd.Customer_New_ID,
+    cd.Secondary_ID,
+    cd.LastUpdatedDate
+FROM 
+    Customers c
+LEFT JOIN 
+    Customer_Details cd
+    ON c.CustomerID = cd.Customer_New_ID
+    AND cd.LastUpdatedDate = (
+        SELECT MaxLastUpdatedDate
+        FROM MaxDateCTE
+        WHERE MaxDateCTE.Customer_New_ID = cd.Customer_New_ID
+    )
+-- If no match on Customer_New_ID, then check with Secondary_ID
+LEFT JOIN 
+    Customer_Details cd2
+    ON c.CustomerID = cd2.Secondary_ID
+    AND cd2.LastUpdatedDate = (
+        SELECT MaxLastUpdatedDate
+        FROM MaxDateCTE
+        WHERE MaxDateCTE.Secondary_ID = cd2.Secondary_ID
+    );
+
