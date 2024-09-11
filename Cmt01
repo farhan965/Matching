@@ -101,13 +101,48 @@ BEGIN
 END;
 GO
 
-with cte as (select distinct Email from SalesforcePW.Contact where [RecordType.DeveloperName] in ('Advisor', 'Hidden_Contact', 'Home_Office') 
-Union all
-select distinct Secondary_Email__c from SalesforcePW.Contact where [RecordType.DeveloperName] in ('Advisor', 'Hidden_Contact', 'Home_Office')),
-cte2 as (
-select Distinct Email as New_Email  from cte),
-cte3 as (select c.Email, m.Id from cte c left join  SalesforcePW.Contact m on c.New_Email=m.(select Distinct Email from SalesforcePW.Contact where LastModifiedDate = (select max(LastModifiedDate) from SalesforcePW.Contact where Email=c.New_Email)
-or c.New_Email=m.(select Distinct Secondary_Email__c from SalesforcePW.Contact where LastModifiedDate = (select max(LastModifiedDate) from SalesforcePW.Contact where Secondary_Email__c=c.New_Email),
-cte4 as (select * from cte3)
-
-select * from cte4
+WITH cte AS (
+    -- Select distinct Email and Secondary_Email__c from SalesforcePW.Contact for RecordType 'Home_Office'
+    SELECT DISTINCT Email AS New_Email 
+    FROM SalesforcePW.Contact 
+    WHERE [RecordType.DeveloperName] = 'Home_Office'
+    
+    UNION ALL
+    
+    SELECT DISTINCT Secondary_Email__c AS New_Email 
+    FROM SalesforcePW.Contact 
+    WHERE [RecordType.DeveloperName] = 'Home_Office'
+),
+cte2 AS (
+    -- Ensure the distinct set of emails from the union result
+    SELECT DISTINCT New_Email 
+    FROM cte
+),
+cte3 AS (
+    -- Join the distinct emails with the Contact table on the most recent LastModifiedDate
+    SELECT 
+        c.New_Email,
+        m.Id 
+    FROM 
+        cte2 c
+    LEFT JOIN 
+        SalesforcePW.Contact m
+    ON (
+        m.Email = c.New_Email 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM SalesforcePW.Contact 
+            WHERE Email = c.New_Email
+        )
+    )
+    OR (
+        m.Secondary_Email__c = c.New_Email 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM SalesforcePW.Contact 
+            WHERE Secondary_Email__c = c.New_Email
+        )
+    )
+)
+SELECT * 
+FROM cte3;
