@@ -100,3 +100,14 @@ BEGIN
     END
 END;
 GO
+
+with cte as (select distinct Email from SalesforcePW.Contact where [RecordType.DeveloperName] in ('Advisor', 'Hidden_Contact', 'Home_Office') 
+Union all
+select distinct Secondary_Email__c from SalesforcePW.Contact where [RecordType.DeveloperName] in ('Advisor', 'Hidden_Contact', 'Home_Office')),
+cte2 as (
+select Distinct Email as New_Email  from cte),
+cte3 as (select c.Email, m.Id from cte c left join  SalesforcePW.Contact m on c.New_Email=m.(select Distinct Email from SalesforcePW.Contact where LastModifiedDate = (select max(LastModifiedDate) from SalesforcePW.Contact where Email=c.New_Email)
+or c.New_Email=m.(select Distinct Secondary_Email__c from SalesforcePW.Contact where LastModifiedDate = (select max(LastModifiedDate) from SalesforcePW.Contact where Secondary_Email__c=c.New_Email),
+cte4 as (select * from cte3)
+
+select * from cte4
