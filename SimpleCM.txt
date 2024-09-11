@@ -77,3 +77,55 @@ EXEC [dbo].[LoadMatchingDataToStaging]
     @MappingTable='East_Orders',
     @NewTable='test'
 
+
+
+
+WITH cte AS (
+    -- Select distinct Email and Secondary_Email__c for RecordType 'Home_Office' from SalesforcePW.Contact
+    SELECT DISTINCT Email AS New_Email 
+    FROM SalesforcePW.Contact 
+    WHERE [RecordType.DeveloperName] = 'Home_Office'
+    
+    UNION ALL
+    
+    SELECT DISTINCT Secondary_Email__c AS New_Email 
+    FROM SalesforcePW.Contact 
+    WHERE [RecordType.DeveloperName] = 'Home_Office'
+),
+cte2 AS (
+    -- Ensure the distinct set of emails from the union result
+    SELECT DISTINCT New_Email 
+    FROM cte
+),
+cte3 AS (
+    -- Join distinct emails (left table) with the SalesforcePW.Contact (right table)
+    SELECT 
+        c.New_Email,
+        m.Id,
+        m.Email,
+        m.Secondary_Email__c,
+        m.LastModifiedDate
+    FROM 
+        cte2 c
+    LEFT JOIN 
+        SalesforcePW.Contact m
+    ON (
+        m.Email = c.New_Email 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM SalesforcePW.Contact 
+            WHERE Email = c.New_Email
+        )
+    )
+    OR (
+        m.Secondary_Email__c = c.New_Email 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM SalesforcePW.Contact 
+            WHERE Secondary_Email__c = c.New_Email
+        )
+    )
+)
+SELECT * 
+FROM cte3;
+
