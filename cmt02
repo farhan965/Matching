@@ -58,3 +58,78 @@ OR
 )
 SELECT * 
 FROM cte3;
+
+
+----CREATE PROCEDURE LoadEmailsToStaging
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128),
+    @SalesforceSchema NVARCHAR(128),
+    @SalesforceTable NVARCHAR(128)
+AS
+BEGIN
+    -- Constructing dynamic SQL query
+    DECLARE @SQL NVARCHAR(MAX);
+
+    SET @SQL = '
+    WITH cte AS (
+        SELECT DISTINCT Email AS New_Email 
+        FROM ' + @MappingSchema + '.' + @MappingTable + '
+        WHERE [RR.Name] IN (''Home'', ''Contact'', ''Office'')
+        
+        UNION ALL
+        
+        SELECT DISTINCT Secondary_Email__c AS New_Email 
+        FROM ' + @MappingSchema + '.' + @MappingTable + '
+        WHERE [RR.Name] IN (''Home'', ''Contact'', ''Office'')
+        
+        UNION ALL
+        
+        SELECT DISTINCT CD AS New_Email 
+        FROM ' + @MappingSchema + '.' + @MappingTable + '
+        WHERE [RR.Name] IN (''Home'', ''Contact'', ''Office'')
+    ),
+    cte2 AS (
+        SELECT DISTINCT New_Email 
+        FROM cte
+    ),
+    cte3 AS (
+        SELECT 
+            c.New_Email,
+            m.Id 
+        FROM 
+            cte2 c
+        LEFT JOIN 
+            ' + @SalesforceSchema + '.' + @SalesforceTable + ' m
+        ON (
+             c.New_Email = m.Email 
+            AND m.LastModifiedDate = (
+                SELECT MAX(LastModifiedDate) 
+                FROM ' + @MappingSchema + '.' + @MappingTable + ' 
+                WHERE Email = c.New_Email
+            )
+        )
+        OR (
+             c.New_Email = m.Secondary_Email__c 
+            AND m.LastModifiedDate = (
+                SELECT MAX(LastModifiedDate) 
+                FROM ' + @MappingSchema + '.' + @MappingTable + ' 
+                WHERE Secondary_Email__c = c.New_Email
+            )
+        )
+        OR (
+             c.New_Email = m.CD 
+            AND m.LastModifiedDate = (
+                SELECT MAX(LastModifiedDate) 
+                FROM ' + @MappingSchema + '.' + @MappingTable + ' 
+                WHERE CD = c.New_Email
+            )
+        )
+    )
+    SELECT * 
+    FROM cte3;
+    ';
+
+    -- Execute the dynamic SQL
+    EXEC sp_executesql @SQL;
+END;
+
