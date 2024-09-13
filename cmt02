@@ -1,92 +1,60 @@
-ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
-(
-    @SourceSchema NVARCHAR(128),
-    @SourceTable NVARCHAR(128),
-    @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128)
-)
-AS
-BEGIN
-    SET NOCOUNT ON;
 
-    DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
-    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @ColumnExists INT;
 
-    -- Step 1: Check if the source table exists in the database
-    IF NOT EXISTS 
-    (
-        SELECT 1 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = @SourceSchema 
-        AND TABLE_NAME = @SourceTable
+WITH cte AS (
+   
+    SELECT DISTINCT Email AS New_Email 
+    FROM PW.Contact 
+    WHERE [RR.Name] in ('Home', 'Contact', 'Office')
+    
+    UNION ALL
+    
+    SELECT DISTINCT Secondary_Email__c AS New_Email 
+    FROM PW.Contact 
+    WHERE[RR.Name] in ('Home', 'Contact', 'Office')
+
+    UNION ALL
+    SELECT DISTINCT CD AS New_Email 
+    FROM PW.Contact 
+    WHERE[RR.Name] in ('Home', 'Contact', 'Office')
+),
+cte2 AS (
+    -- Ensure the distinct set of emails from the union result
+    SELECT DISTINCT New_Email 
+    FROM cte
+),
+cte3 AS (
+    -- Join the distinct emails with the Contact table on the most recent LastModifiedDate
+    SELECT 
+        c.New_Email,
+        m.Id 
+    FROM 
+        cte2 c
+    LEFT JOIN 
+        SalesforcePW.Contact m
+    ON (
+         c.New_Email = m.Email 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM PW.Contact 
+            WHERE Email = c.New_Email
+        )
     )
-    BEGIN
-        -- If the table does not exist, raise an error
-        RAISERROR('Table %s.%s does not exist.', 16, 1, @SourceSchema, @SourceTable);
-        RETURN;
-    END
-
-    -- Step 2: Check if the columns already exist in the source table
-    SELECT @ColumnExists = COUNT(*)
-    FROM INFORMATION_SCHEMA.COLUMNS 
-    WHERE TABLE_SCHEMA = @SourceSchema 
-    AND TABLE_NAME = @SourceTable 
-    AND COLUMN_NAME IN ('status', 'InsertDataTime');
-
-    IF @ColumnExists < 2
-    BEGIN
-        -- Step 3: If the columns do not exist, add them
-        DECLARE @AlterTableSQL NVARCHAR(MAX);
-        SET @AlterTableSQL = 'ALTER TABLE ' + @SourceTableName + ' ADD 
-            status NVARCHAR(50) NULL, 
-            InsertDataTime DATETIME NULL;'; 
-            
-        EXEC sp_executesql @AlterTableSQL;
-
-        -- Step 4: Update the newly added columns based on the required case statements
-        DECLARE @UpdateSQL NVARCHAR(MAX);
-        SET @UpdateSQL = '
-        UPDATE src SET 
-            src.status = CASE 
-                            WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
-                             OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
-                            ELSE ''N''
-                         END,
-            src.InsertDataTime = CASE 
-                                    WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
-                             OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
-                                    ELSE NULL
-                                 END
-        FROM ' + @SourceTableName + ' AS src;';
-        EXEC sp_executesql @UpdateSQL;
-
-        -- For debugging: Print the dynamic SQL for updating the table
-        PRINT 'Columns status, InsertDataTime added and updated in table ' + @SourceTableName;
-    END
-    ELSE
-    BEGIN
-        -- Step 5: If the columns exist, update them where they are NULL and asofdate is max
-        DECLARE @UpdateSQL NVARCHAR(MAX);
-        SET @UpdateSQL = '
-        UPDATE src SET 
-            src.status = CASE 
-                            WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
-                             OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN ''Y''
-                            ELSE ''N''
-                         END,
-            src.InsertDataTime = CASE 
-                                    WHEN LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.CustomerName) FROM ' + @MappingTableName + ' AS map)
-                             OR LOWER(src.[Customer]) IN (SELECT DISTINCT LOWER(map.SecondaryCustomerName ) FROM ' + @MappingTableName + ' AS map) THEN GETDATE()
-                                    ELSE NULL
-                                 END
-        FROM ' + @SourceTableName + ' AS src
-        WHERE src.status IS NULL AND src.InsertDataTime IS NULL AND src.asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ');';
-        
-        EXEC sp_executesql @UpdateSQL;
-
-        -- For debugging: Print the dynamic SQL for updating the table
-        PRINT 'Columns status, InsertDataTime updated in table ' + @SourceTableName;
-    END
-END;
-GO
+    OR (
+         c.New_Email =m.Secondary_Email__c 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM PW.Contact 
+            WHERE Secondary_Email__c = c.New_Email
+        )
+OR
+  (
+       c.New_Email =  m.CD 
+        AND m.LastModifiedDate = (
+            SELECT MAX(LastModifiedDate) 
+            FROM PW.Contact 
+            WHERE Secondary_Email__c = c.New_Email
+        )
+    )
+)
+SELECT * 
+FROM cte3;
