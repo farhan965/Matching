@@ -133,3 +133,10 @@ BEGIN
     EXEC sp_executesql @SQL;
 END;
 
+
+EXEC LoadEmailsToStaging 
+    @MappingSchema = 'PW', 
+    @MappingTable = 'Contact', 
+    @SalesforceSchema = 'SalesforcePW', 
+    @SalesforceTable = 'Contact';
+
