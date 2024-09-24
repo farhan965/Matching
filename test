@@ -135,3 +135,11 @@ LEFT JOIN
         WHERE MaxDateCTE.Secondary_ID = cd2.Secondary_ID
     );
 
+-------test---
+
+IF NOT EXISTS ( SELECT NAME  FROM SYS.COLUMNS where object_id=OBJECT_ID(@{concat((pipeline().parameters.SourceSchemaName),'.',(variables('SourceTableName')))}) AND COLUMN_NAME='UniqueID')
+BEGIN 
+ALTER TABLE @{concat((pipeline().parameters.SourceSchemaName),'.',(variables('SourceTableName'))} ADD UniqueID INT IDENTITY(1,1);
+END
+
+SELECT 1;
