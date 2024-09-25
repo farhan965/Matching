@@ -143,3 +143,15 @@ ALTER TABLE @{concat((pipeline().parameters.SourceSchemaName),'.',(variables('So
 END
 
 SELECT 1;
+
+IF EXISTS (SELECT Table_Name  FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_SCHEMA = '@{pipeline().parameters.SourceSchemaName}' and TABLE_NAME ='@{concat(variables('SourceTableName'),'_T')}'
+                     AND TABLE_TYPE = 'Base Table')
+BEGIN
+DROP TABLE @{pipeline().parameters.SourceSchemaName}.@{concat(variables('SourceTableName'),'_T')};
+select 1;
+END
+
+ELSE
+SELECT 1
+END
