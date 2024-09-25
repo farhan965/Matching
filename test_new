@@ -1,9 +1,8 @@
 DECLARE @ColumnName NVARCHAR(128);
 
-SELECT @ColumnName = COLUMN_NAME
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = 'table1'
-  AND COLUMN_NAME IN ('Contact', 'Contact2', 'Contact3');
+SELECT @ColumnName = NAME
+FROM SYS.COLUMNS where object_id=OBJECT_ID('table_name') 
+  AND NAME IN ('Email1', 'Email2');
 
 -- To check if a column was found
 IF @ColumnName IS NOT NULL
