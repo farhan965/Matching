@@ -17,13 +17,12 @@ END;
 ----Proc---
 
 
-ALTER PROCEDURE [test].[LoadMatchingDataToStagingT1]
+   ALTER PROCEDURE [test].[LoadMatchingDataToStagingT1]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
     @MappingTable NVARCHAR(128)
-     -- Parameter to provide a new table name
 )
 AS
 BEGIN
@@ -31,12 +30,25 @@ BEGIN
 
     DECLARE @DynamicSQL NVARCHAR(MAX);
     DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @EmailColumnName NVARCHAR(128);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
     DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_T');
-	
 
-    -- Step 1: Dynamically load column names from the source table
+    -- Step 1: Dynamically identify the correct email column from the source table
+    SELECT @EmailColumnName = NAME
+    FROM SYS.COLUMNS 
+    WHERE object_id = OBJECT_ID(@SourceTableName) 
+    AND NAME IN ('Email1', 'Email2');
+
+    -- Check if an email column was found; if not, raise an error
+    IF @EmailColumnName IS NULL
+    BEGIN
+        RAISERROR('No Email column found in the source table.', 16, 1);
+        RETURN;
+    END
+
+    -- Step 2: Dynamically load all column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = @SourceTable 
@@ -45,30 +57,29 @@ BEGIN
     -- For debugging: Print the dynamic SQL for column names
     PRINT 'Column Names: ' + @ColumnNames;
 
-    -- Step 2: Create a CTE to perform the operations
+    -- Step 3: Create a CTE to perform the operations using the identified Email column
     SET @DynamicSQL = '
     WITH 
     CTE AS
     (
         SELECT ' + @ColumnNames + ',
             CASE 
-                WHEN LOWER(src.[FA-PM Email]) IN (SELECT  LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+                WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ')
                       THEN ''Y''
                 ELSE ''N''
             END AS Status,
             CASE 
-               WHEN LOWER(src.[FA-PM Email]) IN (SELECT  LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+               WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ') 
                       THEN GETDATE()
                 ELSE NULL
             END AS InsertDataTime,
-			map.Id as ID
-    FROM ' + @SourceTableName + ' AS src
-    LEFT JOIN ' + @MappingTableName + ' AS map
-    ON (LOWER(src.[FA-PM Email]) = LOWER(map.New_Email)))
-	
+            map.Id as ID
+        FROM ' + @SourceTableName + ' AS src
+        LEFT JOIN ' + @MappingTableName + ' AS map
+        ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
+    )
         
-   
-    -- Step 3: Create the new table from the CTE
+    -- Step 4: Create the new table from the CTE
     SELECT * INTO ' + @NewTableName + ' FROM CTE;';
 
     -- Execute the dynamic SQL
@@ -78,3 +89,4 @@ BEGIN
     PRINT 'Dynamic SQL executed to create table: ' + @NewTableName;
 
 END;
+
