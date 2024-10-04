@@ -75,3 +75,127 @@ END;
 GO
 
 
+----sol----
+
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
+(
+    @SourceSchema NVARCHAR(128),
+    @SourceTable NVARCHAR(128),
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128)
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @DynamicSQL NVARCHAR(MAX);
+    DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @EmailColumnName NVARCHAR(128);
+    DECLARE @FirstNameColumn NVARCHAR(128);
+    DECLARE @LastNameColumn NVARCHAR(128);
+    DECLARE @IDColumn NVARCHAR(128);
+    DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
+    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
+
+    -- Dynamically identify the correct email, first name, last name, and ID columns from the source table
+    SELECT 
+        @EmailColumnName = NAME
+    FROM SYS.COLUMNS 
+    WHERE object_id = OBJECT_ID(@SourceTableName) 
+    AND NAME IN ('Email1', 'Email2');
+
+    -- Check for First Name, Last Name, and ID columns
+    SELECT 
+        @FirstNameColumn = MAX(CASE WHEN NAME IN ('First Name') THEN NAME END),
+        @LastNameColumn = MAX(CASE WHEN NAME IN ('Last Name') THEN NAME END),
+        @IDColumn = MAX(CASE WHEN NAME IN ('ID') THEN NAME END)
+    FROM SYS.COLUMNS 
+    WHERE object_id = OBJECT_ID(@SourceTableName);
+
+    -- Step 2: Dynamically load all column names from the source table
+    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = @SourceTable 
+    AND TABLE_SCHEMA = @SourceSchema;
+
+    -- For debugging: Print the dynamic SQL for column names
+    PRINT 'Column Names: ' + @ColumnNames;
+
+    -- Step 3: Create a CTE to perform the operations based on source schema
+    IF @SourceSchema = 'test1'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH CTE AS
+        (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ') 
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ')
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime
+            FROM ' + @SourceTableName + ' AS src
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+    END
+    ELSE IF @SourceSchema = 'test2'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH CTE AS
+        (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ')
+                         OR src.' + QUOTENAME(@IDColumn) + ' = map.ID THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ')
+                         OR src.' + QUOTENAME(@IDColumn) + ' = map.ID THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime
+            FROM ' + @SourceTableName + ' AS src
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+    END
+    ELSE IF @SourceSchema = 'test3'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH CTE AS
+        (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@FirstNameColumn) + ') IN (SELECT LOWER(map.FirstName) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@LastNameColumn) + ') IN (SELECT LOWER(map.LastName) FROM ' + @MappingTableName + ') 
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@FirstNameColumn) + ') IN (SELECT LOWER(map.FirstName) FROM ' + @MappingTableName + ')
+                         OR LOWER(src.' + QUOTENAME(@LastNameColumn) + ') IN (SELECT LOWER(map.LastName) FROM ' + @MappingTableName + ') 
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime
+            FROM ' + @SourceTableName + ' AS src
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+    END
+
+    -- Execute the dynamic SQL
+    EXEC sp_executesql @DynamicSQL;
+
+    -- For debugging: Print the dynamic SQL for table creation
+    PRINT 'Dynamic SQL executed to create table: ' + @NewTableName;
+
+END;
+GO
+
+
+
