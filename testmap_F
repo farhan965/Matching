@@ -1,0 +1,190 @@
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
+(
+    @SourceSchema NVARCHAR(128),
+    @SourceTable NVARCHAR(128),
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128)
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @DynamicSQL NVARCHAR(MAX);
+    DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @EmailColumnName NVARCHAR(128);
+    DECLARE @FirstNameColumn NVARCHAR(128);
+    DECLARE @LastNameColumn NVARCHAR(128);
+    DECLARE @IDColumn NVARCHAR(128);
+    DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
+    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
+
+    -- Step 1: Dynamically identify required columns based on source schema
+    IF @SourceSchema = 'test1'
+    BEGIN
+        -- Only fetch Email column for test1 schema
+        SELECT 
+            @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
+    END
+    ELSE IF @SourceSchema = 'test2'
+    BEGIN
+        -- Fetch Email and ID columns for test2 schema
+        SELECT 
+            @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
+
+        SELECT 
+            @IDColumn = MAX(CASE WHEN NAME IN ('ID') THEN NAME END)
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName);
+    END
+    ELSE IF @SourceSchema = 'test3'
+    BEGIN
+        -- Fetch Email, First Name, and Last Name columns for test3 schema
+        SELECT 
+            @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
+
+        SELECT 
+            @FirstNameColumn = MAX(CASE WHEN NAME IN ('First Name') THEN NAME END),
+            @LastNameColumn = MAX(CASE WHEN NAME IN ('Last Name') THEN NAME END)
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName);
+    END
+
+    -- Step 2: Dynamically load all column names from the source table
+    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = @SourceTable 
+    AND TABLE_SCHEMA = @SourceSchema;
+
+    -- Step 3: Create dynamic SQL with logic to handle duplicates
+    IF @SourceSchema = 'test1'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH MaxMapping AS (
+            SELECT 
+                map.UID, 
+                map.PrimaryEmail, 
+                map.SecondaryEmail, 
+                map.LastCreatedDate,
+                ROW_NUMBER() OVER (PARTITION BY LOWER(map.PrimaryEmail) ORDER BY map.LastCreatedDate DESC) AS rn
+            FROM ' + @MappingTableName + ' AS map
+        )
+        SELECT * INTO ' + @NewTableName + ' 
+        FROM (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                (SELECT m.UID FROM MaxMapping AS m 
+                 WHERE LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.PrimaryEmail) 
+                 OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.SecondaryEmail)
+                 ORDER BY m.LastCreatedDate DESC
+                 OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY) AS SUID
+            FROM ' + @SourceTableName + ' AS src
+        ) AS final;';
+    END
+    ELSE IF @SourceSchema = 'test2'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH MaxMapping AS (
+            SELECT 
+                map.UID, 
+                map.PrimaryEmail, 
+                map.SecondaryEmail, 
+                map.LastCreatedDate,
+                ROW_NUMBER() OVER (PARTITION BY LOWER(map.PrimaryEmail) ORDER BY map.LastCreatedDate DESC) AS rn
+            FROM ' + @MappingTableName + ' AS map
+        )
+        SELECT * INTO ' + @NewTableName + ' 
+        FROM (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR src.' + QUOTENAME(@IDColumn) + ' = (SELECT m.UID FROM MaxMapping AS m WHERE m.rn = 1)
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR src.' + QUOTENAME(@IDColumn) + ' = (SELECT m.UID FROM MaxMapping AS m WHERE m.rn = 1)
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                (SELECT m.UID FROM MaxMapping AS m 
+                 WHERE LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.PrimaryEmail) 
+                 OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.SecondaryEmail)
+                 OR src.' + QUOTENAME(@IDColumn) + ' = (SELECT m.UID FROM MaxMapping AS m WHERE m.rn = 1)
+                 ORDER BY m.LastCreatedDate DESC
+                 OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY) AS SUID
+            FROM ' + @SourceTableName + ' AS src
+        ) AS final;'; 
+    END
+    ELSE IF @SourceSchema = 'test3'
+    BEGIN
+        SET @DynamicSQL = '
+        WITH MaxMapping AS (
+            SELECT 
+                map.UID, 
+                map.PrimaryEmail, 
+                map.SecondaryEmail, 
+                map.FirstName,
+                map.LastName,
+                map.LastCreatedDate,
+                ROW_NUMBER() OVER (
+                    PARTITION BY 
+                        LOWER(map.PrimaryEmail), 
+                        LOWER(map.SecondaryEmail), 
+                        LOWER(map.FirstName), 
+                        LOWER(map.LastName)
+                    ORDER BY 
+                        map.LastCreatedDate DESC
+                ) AS rn
+            FROM ' + @MappingTableName + ' AS map
+        )
+        SELECT * INTO ' + @NewTableName + ' 
+        FROM (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@FirstNameColumn) + ') IN (SELECT LOWER(m.FirstName) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@LastNameColumn) + ') IN (SELECT LOWER(m.LastName) FROM MaxMapping AS m WHERE m.rn = 1) 
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.PrimaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(m.SecondaryEmail) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@FirstNameColumn) + ') IN (SELECT LOWER(m.FirstName) FROM MaxMapping AS m WHERE m.rn = 1)
+                         OR LOWER(src.' + QUOTENAME(@LastNameColumn) + ') IN (SELECT LOWER(m.LastName) FROM MaxMapping AS m WHERE m.rn = 1) 
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                (SELECT m.UID FROM MaxMapping AS m 
+                 WHERE LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.PrimaryEmail) 
+                 OR LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(m.SecondaryEmail)
+                 OR LOWER(src.' + QUOTENAME(@FirstNameColumn) + ') = LOWER(m.FirstName)
+                 OR LOWER(src.' + QUOTENAME(@LastNameColumn) + ') = LOWER(m.LastName)
+                 ORDER BY m.LastCreatedDate DESC
+                 OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY) AS SUID
+            FROM ' + @SourceTableName + ' AS src
+        ) AS final;'; 
+    END
+
+    -- Step 4: Execute the dynamic SQL
+    EXEC sp_executesql @DynamicSQL;
+END
