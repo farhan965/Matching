@@ -1,157 +1,91 @@
-USE [SalesStaging]
-GO
-
-/****** Object:  StoredProcedure [dbo].[LoadMatchingDataToStaging]    Script Date: 9/10/2024 10:30:39 PM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
-
-ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingTest]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
     @MappingTable NVARCHAR(128),
-    @NewTable NVARCHAR(128)  -- Parameter to provide a new table name
+    @BatchSize INT = 100000  -- Batch size for processing
 )
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @DynamicSQL NVARCHAR(MAX);
-    DECLARE @ColumnNames NVARCHAR(MAX);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@NewTable + '_T');
-	DECLARE @DropSourceTableSQL NVARCHAR(MAX);
-	DECLARE @RenameTableSQL NVARCHAR(MAX);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
+    DECLARE @RowCount INT = 1;  -- Initialize with a non-zero value for the loop
 
-    -- Step 1: Dynamically load column names from the source table
-    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_NAME = @SourceTable 
-    AND TABLE_SCHEMA = @SourceSchema;
-
-    -- For debugging: Print the dynamic SQL for column names
-    PRINT 'Column Names: ' + @ColumnNames;
-
-    -- Step 2: Create a CTE to perform the operations
+    -- Step 1: Create a new table with all columns from the source and a new Status column
+    DECLARE @DynamicSQL NVARCHAR(MAX);
     SET @DynamicSQL = '
-    WITH 
-    CTE AS
-    (
-        SELECT ' + @ColumnNames + ',
-            CASE 
-                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ')
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ') THEN ''Y''
-                ELSE ''N''
-            END AS status,
-            CASE 
-                WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM ' + @MappingTableName + ')
-                     OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c ) FROM ' + @MappingTableName + ') THEN GETDATE()
-                ELSE NULL
-            END AS InsertDataTime,
-			map.Id as OD
-    FROM ' + @SourceTableName + ' AS src
-    LEFT JOIN ' + @MappingTableName + ' AS map
-    ON (LOWER(src.[FA-PM Email]) = LOWER(map.Email)) OR (LOWER(src.[FA-PM Email]) = LOWER(map.Secondary_Email__c)))
-	
-        
-   
-    -- Step 3: Create the new table from the CTE
-    SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+    SELECT *,
+        ''N'' AS Status
+    INTO ' + @NewTableName + '
+    FROM ' + @SourceTableName + ';';
 
-    -- Execute the dynamic SQL
     EXEC sp_executesql @DynamicSQL;
 
-    -- For debugging: Print the dynamic SQL for table creation
-    PRINT 'Dynamic SQL executed to create table: ' + @NewTable;
+    -- Ensure indexes on temporary table for faster updates
+    CREATE INDEX idx_email ON ' + @NewTableName + ' (Email);
+    CREATE INDEX idx_name ON ' + @NewTableName + ' (Name);
 
-	 -- Step 4: Drop the old source table
-    SET @DropSourceTableSQL = 'DROP TABLE IF EXISTS ' + @SourceTableName + ';';
-    EXEC sp_executesql @DropSourceTableSQL;
+    -- Step 2: Process in batches
+    WHILE @RowCount > 0
+    BEGIN
+        -- Update Status based on Primary Email
+        UPDATE TOP (@BatchSize) tgt
+        SET Status = 'Y'
+        FROM ' + @NewTableName + ' AS tgt
+        WHERE LOWER(tgt.Email) IN (
+            SELECT LOWER(map.PrimaryEmail)
+            FROM ' + @MappingTableName + ' AS map
+        )
+        AND tgt.Status = 'N';  -- Only update if Status is still N
 
-	 -- Step 5: Rename the new table to the original source table name
-    SET @RenameTableSQL = 'EXEC sp_rename ''' + @NewTableName + ''', ''' + @SourceTable + ''';';
-    EXEC sp_executesql @RenameTableSQL;
+        -- Get the number of rows updated in the last operation
+        SET @RowCount = @@ROWCOUNT;
+
+        -- If no rows were updated, exit the loop
+        IF @RowCount = 0 BREAK;
+    END;
+
+    -- Step 3: Update Status based on Secondary Email in batches
+    SET @RowCount = 1;  -- Reset for the next batch
+    WHILE @RowCount > 0
+    BEGIN
+        UPDATE TOP (@BatchSize) tgt
+        SET Status = 'Y'
+        FROM ' + @NewTableName + ' AS tgt
+        WHERE LOWER(tgt.Email) IN (
+            SELECT LOWER(map.SecondaryEmail)
+            FROM ' + @MappingTableName + ' AS map
+        )
+        AND tgt.Status = 'N';  -- Only update if Status is still N
+
+        SET @RowCount = @@ROWCOUNT;
+
+        IF @RowCount = 0 BREAK;
+    END;
+
+    -- Step 4: Update Status based on Name in batches
+    SET @RowCount = 1;  -- Reset for the next batch
+    WHILE @RowCount > 0
+    BEGIN
+        UPDATE TOP (@BatchSize) tgt
+        SET Status = 'Y'
+        FROM ' + @NewTableName + ' AS tgt
+        WHERE LOWER(tgt.Name) IN (
+            SELECT LOWER(map.Name)
+            FROM ' + @MappingTableName + ' AS map
+        )
+        AND tgt.Status = 'N';  -- Only update if Status is still N
+
+        SET @RowCount = @@ROWCOUNT;
+
+        IF @RowCount = 0 BREAK;
+    END;
+
+    -- Optional: If you want to review the newly created table
+    PRINT 'New table created: ' + @NewTableName;
 END;
 GO
-
------DML-----
-
-UPDATE src SET 
-            src.status = CASE 
-                            WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM SalesforcePW.Contact AS map)
-                             OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c  ) FROM SalesforcePW.Contact AS map) THEN 'Y'
-                            ELSE 'N'
-                         END,
-            src.InsertDataTime = CASE 
-                                    WHEN LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Email) FROM SalesforcePW.Contact AS map)
-                             OR LOWER(src.[FA-PM Email]) IN (SELECT DISTINCT LOWER(map.Secondary_Email__c  ) FROM SalesforcePW.Contact AS map) THEN GETDATE()
-                                    ELSE NULL
-                                 END
-        FROM [DataKit].[test_Orent_Orders] AS src
-        WHERE src.status IS NULL AND src.InsertDataTime IS NULL AND src.AsOfDate = (SELECT MAX(AsOfDate) FROM [DataKit].[test_Orent_Orders]);
-
-
--------
-
-WITH MaxDateCTE AS (
-    -- Select the most recent record for each Customer_New_ID or Secondary_ID
-    SELECT
-        Customer_New_ID,
-        Secondary_ID,
-        MAX(LastUpdatedDate) AS MaxLastUpdatedDate
-    FROM
-        Customer_Details
-    GROUP BY
-        Customer_New_ID, Secondary_ID
-)
-SELECT 
-    c.CustomerID,
-    cd.Customer_New_ID,
-    cd.Secondary_ID,
-    cd.LastUpdatedDate
-FROM 
-    Customers c
-LEFT JOIN 
-    Customer_Details cd
-    ON c.CustomerID = cd.Customer_New_ID
-    AND cd.LastUpdatedDate = (
-        SELECT MaxLastUpdatedDate
-        FROM MaxDateCTE
-        WHERE MaxDateCTE.Customer_New_ID = cd.Customer_New_ID
-    )
--- If no match on Customer_New_ID, then check with Secondary_ID
-LEFT JOIN 
-    Customer_Details cd2
-    ON c.CustomerID = cd2.Secondary_ID
-    AND cd2.LastUpdatedDate = (
-        SELECT MaxLastUpdatedDate
-        FROM MaxDateCTE
-        WHERE MaxDateCTE.Secondary_ID = cd2.Secondary_ID
-    );
-
--------test---
-
-IF NOT EXISTS ( SELECT NAME  FROM SYS.COLUMNS where object_id=OBJECT_ID(@{concat((pipeline().parameters.SourceSchemaName),'.',(variables('SourceTableName')))}) AND COLUMN_NAME='UniqueID')
-BEGIN 
-ALTER TABLE @{concat((pipeline().parameters.SourceSchemaName),'.',(variables('SourceTableName'))} ADD UniqueID INT IDENTITY(1,1);
-END
-
-SELECT 1;
-
-IF EXISTS (SELECT Table_Name  FROM INFORMATION_SCHEMA.TABLES 
-                WHERE TABLE_SCHEMA = '@{pipeline().parameters.SourceSchemaName}' and TABLE_NAME ='@{concat(variables('SourceTableName'),'_T')}'
-                     AND TABLE_TYPE = 'Base Table')
-BEGIN
-DROP TABLE @{pipeline().parameters.SourceSchemaName}.@{concat(variables('SourceTableName'),'_T')};
-select 1;
-END
-
-ELSE
-SELECT 1
-END
