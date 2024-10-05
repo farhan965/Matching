@@ -1,148 +1,119 @@
-ALTER PROCEDURE [dbo].[LoadMatchingDataToStaging]
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
 (
     @SourceSchema NVARCHAR(128),
-    @SourceTable NVARCHAR(128)
+    @SourceTable NVARCHAR(128),
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128)
 )
 AS
 BEGIN
     SET NOCOUNT ON;
 
+    DECLARE @DynamicSQL NVARCHAR(MAX);
+    DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @EmailColumnName NVARCHAR(128);
+    DECLARE @FirstNameColumn NVARCHAR(128);
+    DECLARE @LastNameColumn NVARCHAR(128);
+    DECLARE @IDColumn NVARCHAR(128);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
-    DECLARE @ColumnExists BIT;
+    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
 
-    -- Step 1: Check if the source table exists in the database
-    IF NOT EXISTS 
-    (
-        SELECT 1 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = @SourceSchema 
-        AND TABLE_NAME = @SourceTable
-    )
+    -- Step 1: Dynamically identify required columns based on source schema
+    IF @SourceSchema = 'test1'
     BEGIN
-        -- If the table does not exist, raise an error
-        RAISERROR('Table %s.%s does not exist.', 16, 1, @SourceSchema, @SourceTable);
-        RETURN;
+        SELECT @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
     END
-
-    -- Step 2: Check if the columns already exist in the source table
-    SELECT @ColumnExists = COUNT(*)
-    FROM INFORMATION_SCHEMA.COLUMNS 
-    WHERE TABLE_SCHEMA = @SourceSchema 
-    AND TABLE_NAME = @SourceTable 
-    AND COLUMN_NAME IN ('status', 'InsertDataTime', 'OD');
-
-    IF @ColumnExists < 3
+    ELSE IF @SourceSchema = 'test2'
     BEGIN
-        -- Step 3: If the columns do not exist, add them
-        DECLARE @AlterTableSQL NVARCHAR(MAX);
-        SET @AlterTableSQL = 'ALTER TABLE ' + @SourceTableName + ' ADD 
-            status NVARCHAR(50) NULL, 
-            InsertDataTime DATETIME NULL, 
-            OD NVARCHAR(50) NULL;';
-        EXEC sp_executesql @AlterTableSQL;
-
-        -- Step 4: Update the newly added columns based on the required case statements
-        DECLARE @UpdateSQL NVARCHAR(MAX);
-        SET @UpdateSQL = '
-        UPDATE ' + @SourceTableName + '
-        SET 
-            status = CASE 
-                        WHEN /* your condition here */ THEN ''Y''
-                        ELSE ''N''
-                     END,
-            InsertDataTime = CASE 
-                                WHEN /* your condition here */ THEN GETDATE()
-                                ELSE NULL
-                             END,
-            OD = CASE 
-                    WHEN /* your condition here */ THEN ''NewValue''
-                    ELSE NULL
-                 END;';
-        EXEC sp_executesql @UpdateSQL;
-
-        -- For debugging: Print the dynamic SQL for updating the table
-        PRINT 'Columns status, InsertDataTime, and OD added and updated in table ' + @SourceTableName;
-    END
-    ELSE
-    BEGIN
-        -- Step 5: If the columns exist, update them where they are NULL and asofdate is max
-        DECLARE @UpdateSQL NVARCHAR(MAX);
-        SET @UpdateSQL = '
-        WITH cte AS 
-        (
-            SELECT * 
-            FROM ' + @SourceTableName + ' 
-            WHERE asofdate = (SELECT MAX(asofdate) FROM ' + @SourceTableName + ')
-        )
-        UPDATE cte
-        SET 
-            status = CASE 
-                        WHEN status IS NULL THEN ''Y''
-                        ELSE status
-                     END,
-            InsertDataTime = CASE 
-                                WHEN InsertDataTime IS NULL THEN GETDATE()
-                                ELSE InsertDataTime
-                             END,
-            OD = CASE 
-                    WHEN OD IS NULL THEN ''UpdatedValue''
-                    ELSE OD
-                 END
-        WHERE 
-            status IS NULL 
-            AND InsertDataTime IS NULL 
-            AND OD IS NULL;';
+        SELECT @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
         
-        EXEC sp_executesql @UpdateSQL;
-
-        -- For debugging: Print the dynamic SQL for updating the table
-        PRINT 'Columns status, InsertDataTime, and OD updated in table ' + @SourceTableName;
+        SELECT @IDColumn = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName)
+        AND NAME = 'ID';
     END
+    ELSE IF @SourceSchema = 'test3'
+    BEGIN
+        SELECT @EmailColumnName = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName) 
+        AND NAME IN ('Email1', 'Email2');
+        
+        SELECT @FirstNameColumn = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName)
+        AND NAME = 'First Name';
+        
+        SELECT @LastNameColumn = NAME
+        FROM SYS.COLUMNS 
+        WHERE object_id = OBJECT_ID(@SourceTableName)
+        AND NAME = 'Last Name';
+    END
+
+    -- Step 2: Load all column names from the source table
+    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = @SourceTable 
+    AND TABLE_SCHEMA = @SourceSchema;
+
+    -- Step 3: Primary Email Check (First Pass)
+    SET @DynamicSQL = '
+        WITH CTE AS (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ') 
+                    THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ') 
+                    THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime
+            FROM ' + @SourceTableName + ' AS src
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+    
+    -- Execute first pass SQL
+    EXEC sp_executesql @DynamicSQL;
+    
+    -- Step 4: Secondary Email Check (Second Pass for Status = 'N' and InsertDataTime = NULL)
+    SET @DynamicSQL = '
+        UPDATE ' + @NewTableName + '
+        SET Status = ''Y'', 
+            InsertDataTime = GETDATE()
+        WHERE LOWER(' + QUOTENAME(@EmailColumnName) + ') IN (
+            SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + '
+        )
+        AND Status = ''N''
+        AND InsertDataTime IS NULL;';
+    
+    -- Execute second pass SQL
+    EXEC sp_executesql @DynamicSQL;
+
+    -- Step 5: FirstName and LastName Check for test3 (Third Pass for Status = 'N' and InsertDataTime = NULL)
+    IF @SourceSchema = 'test3'
+    BEGIN
+        SET @DynamicSQL = '
+            UPDATE ' + @NewTableName + '
+            SET Status = ''Y'', 
+                InsertDataTime = GETDATE()
+            WHERE (LOWER(' + QUOTENAME(@FirstNameColumn) + ') = LOWER(map.FirstName) 
+            OR LOWER(' + QUOTENAME(@LastNameColumn) + ') = LOWER(map.LastName))
+            AND Status = ''N''
+            AND InsertDataTime IS NULL;';
+        
+        -- Execute third pass SQL
+        EXEC sp_executesql @DynamicSQL;
+    END
+
+    -- Print the executed dynamic SQL for debugging purposes
+    PRINT 'Dynamic SQL executed for primary, secondary, and name matching in ' + @NewTableName;
+    
 END;
 GO
-
-WITH cte AS (
-    -- Select distinct Email and Secondary_Email__c from SalesforcePW.Contact for RecordType 'Home_Office'
-    SELECT DISTINCT Email AS New_Email 
-    FROM SalesforcePW.Contact 
-    WHERE [RecordType.DeveloperName] = 'Home_Office'
-    
-    UNION ALL
-    
-    SELECT DISTINCT Secondary_Email__c AS New_Email 
-    FROM SalesforcePW.Contact 
-    WHERE [RecordType.DeveloperName] = 'Home_Office'
-),
-cte2 AS (
-    -- Ensure the distinct set of emails from the union result
-    SELECT DISTINCT New_Email 
-    FROM cte
-),
-cte3 AS (
-    -- Join the distinct emails with the Contact table on the most recent LastModifiedDate
-    SELECT 
-        c.New_Email,
-        m.Id 
-    FROM 
-        cte2 c
-    LEFT JOIN 
-        SalesforcePW.Contact m
-    ON (
-        m.Email = c.New_Email 
-        AND m.LastModifiedDate = (
-            SELECT MAX(LastModifiedDate) 
-            FROM SalesforcePW.Contact 
-            WHERE Email = c.New_Email
-        )
-    )
-    OR (
-        m.Secondary_Email__c = c.New_Email 
-        AND m.LastModifiedDate = (
-            SELECT MAX(LastModifiedDate) 
-            FROM SalesforcePW.Contact 
-            WHERE Secondary_Email__c = c.New_Email
-        )
-    )
-)
-SELECT * 
-FROM cte3;
