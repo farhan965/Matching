@@ -1,4 +1,4 @@
-ALTER PROCEDURE [test].[LoadMatchingDataToStagingTest]
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
@@ -27,7 +27,7 @@ BEGIN
 
     -- Ensure indexes on temporary table for faster updates
     CREATE INDEX idx_email ON ' + @NewTableName + ' (Email);
-    CREATE INDEX idx_name ON ' + @NewTableName + ' (Name);
+    
 
     -- Step 2: Process in batches
     WHILE @RowCount > 0
@@ -37,7 +37,7 @@ BEGIN
         SET Status = 'Y'
         FROM ' + @NewTableName + ' AS tgt
         WHERE LOWER(tgt.Email) IN (
-            SELECT LOWER(map.PrimaryEmail)
+            SELECT LOWER(map.Email)
             FROM ' + @MappingTableName + ' AS map
         )
         AND tgt.Status = 'N';  -- Only update if Status is still N
@@ -57,7 +57,7 @@ BEGIN
         SET Status = 'Y'
         FROM ' + @NewTableName + ' AS tgt
         WHERE LOWER(tgt.Email) IN (
-            SELECT LOWER(map.SecondaryEmail)
+            SELECT LOWER(map.Secondary_Email)
             FROM ' + @MappingTableName + ' AS map
         )
         AND tgt.Status = 'N';  -- Only update if Status is still N
@@ -67,23 +67,7 @@ BEGIN
         IF @RowCount = 0 BREAK;
     END;
 
-    -- Step 4: Update Status based on Name in batches
-    SET @RowCount = 1;  -- Reset for the next batch
-    WHILE @RowCount > 0
-    BEGIN
-        UPDATE TOP (@BatchSize) tgt
-        SET Status = 'Y'
-        FROM ' + @NewTableName + ' AS tgt
-        WHERE LOWER(tgt.Name) IN (
-            SELECT LOWER(map.Name)
-            FROM ' + @MappingTableName + ' AS map
-        )
-        AND tgt.Status = 'N';  -- Only update if Status is still N
 
-        SET @RowCount = @@ROWCOUNT;
-
-        IF @RowCount = 0 BREAK;
-    END;
 
     -- Optional: If you want to review the newly created table
     PRINT 'New table created: ' + @NewTableName;
