@@ -18,29 +18,30 @@ BEGIN
     -- Step 1: Create a new table with all columns from the source and a new Status column
     DECLARE @DynamicSQL NVARCHAR(MAX);
     SET @DynamicSQL = '
-    SELECT *,
-        ''N'' AS Status
+    SELECT *, ''N'' AS Status
     INTO ' + @NewTableName + '
     FROM ' + @SourceTableName + ';';
 
     EXEC sp_executesql @DynamicSQL;
 
     -- Ensure indexes on temporary table for faster updates
-    CREATE INDEX idx_email ON ' + @NewTableName + ' (Email);
+    SET @DynamicSQL = 'CREATE INDEX idx_email ON ' + @NewTableName + ' (Email);';
+    EXEC sp_executesql @DynamicSQL;
     
-
-    -- Step 2: Process in batches
+    -- Step 2: Process in batches for Primary Email
     WHILE @RowCount > 0
     BEGIN
-        -- Update Status based on Primary Email
-        UPDATE TOP (@BatchSize) tgt
-        SET Status = 'Y'
+        SET @DynamicSQL = '
+        UPDATE TOP (' + CAST(@BatchSize AS NVARCHAR(10)) + ') tgt
+        SET Status = ''Y''
         FROM ' + @NewTableName + ' AS tgt
         WHERE LOWER(tgt.Email) IN (
             SELECT LOWER(map.Email)
             FROM ' + @MappingTableName + ' AS map
         )
-        AND tgt.Status = 'N';  -- Only update if Status is still N
+        AND tgt.Status = ''N'';';  -- Only update if Status is still N
+
+        EXEC sp_executesql @DynamicSQL;
 
         -- Get the number of rows updated in the last operation
         SET @RowCount = @@ROWCOUNT;
@@ -53,23 +54,25 @@ BEGIN
     SET @RowCount = 1;  -- Reset for the next batch
     WHILE @RowCount > 0
     BEGIN
-        UPDATE TOP (@BatchSize) tgt
-        SET Status = 'Y'
+        SET @DynamicSQL = '
+        UPDATE TOP (' + CAST(@BatchSize AS NVARCHAR(10)) + ') tgt
+        SET Status = ''Y''
         FROM ' + @NewTableName + ' AS tgt
         WHERE LOWER(tgt.Email) IN (
             SELECT LOWER(map.Secondary_Email)
             FROM ' + @MappingTableName + ' AS map
         )
-        AND tgt.Status = 'N';  -- Only update if Status is still N
+        AND tgt.Status = ''N'';';  -- Only update if Status is still N
 
+        EXEC sp_executesql @DynamicSQL;
+
+        -- Get the number of rows updated in the last operation
         SET @RowCount = @@ROWCOUNT;
 
         IF @RowCount = 0 BREAK;
     END;
 
-
-
     -- Optional: If you want to review the newly created table
     PRINT 'New table created: ' + @NewTableName;
 END;
-GO
+GO  
