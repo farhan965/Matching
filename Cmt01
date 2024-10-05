@@ -1,4 +1,4 @@
-ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT1]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
@@ -12,108 +12,57 @@ BEGIN
     DECLARE @DynamicSQL NVARCHAR(MAX);
     DECLARE @ColumnNames NVARCHAR(MAX);
     DECLARE @EmailColumnName NVARCHAR(128);
-    DECLARE @FirstNameColumn NVARCHAR(128);
-    DECLARE @LastNameColumn NVARCHAR(128);
-    DECLARE @IDColumn NVARCHAR(128);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
     DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
 
-    -- Step 1: Dynamically identify required columns based on source schema
-    IF @SourceSchema = 'test1'
-    BEGIN
-        SELECT @EmailColumnName = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName) 
-        AND NAME IN ('Email1', 'Email2');
-    END
-    ELSE IF @SourceSchema = 'test2'
-    BEGIN
-        SELECT @EmailColumnName = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName) 
-        AND NAME IN ('Email1', 'Email2');
-        
-        SELECT @IDColumn = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName)
-        AND NAME = 'ID';
-    END
-    ELSE IF @SourceSchema = 'test3'
-    BEGIN
-        SELECT @EmailColumnName = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName) 
-        AND NAME IN ('Email1', 'Email2');
-        
-        SELECT @FirstNameColumn = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName)
-        AND NAME = 'First Name';
-        
-        SELECT @LastNameColumn = NAME
-        FROM SYS.COLUMNS 
-        WHERE object_id = OBJECT_ID(@SourceTableName)
-        AND NAME = 'Last Name';
-    END
+    -- Step 1: Identify the email column
+    SELECT 
+        @EmailColumnName = NAME
+    FROM SYS.COLUMNS 
+    WHERE object_id = OBJECT_ID(@SourceTableName) 
+    AND NAME IN ('Email1', 'Email2');
 
-    -- Step 2: Load all column names from the source table
+    -- Step 2: Dynamically load all column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = @SourceTable 
     AND TABLE_SCHEMA = @SourceSchema;
 
-    -- Step 3: Primary Email Check (First Pass)
+    -- Step 3: Create a CTE to first update records based on PrimaryEmail
     SET @DynamicSQL = '
-        WITH CTE AS (
+        WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ') 
-                    THEN ''Y'' ELSE ''N'' 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         THEN ''Y'' ELSE ''N'' 
                 END AS Status,
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ') 
-                    THEN GETDATE() ELSE NULL 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.PrimaryEmail) FROM ' + @MappingTableName + ')
+                         THEN GETDATE() ELSE NULL 
                 END AS InsertDataTime
             FROM ' + @SourceTableName + ' AS src
         )
-        SELECT * INTO ' + @NewTableName + ' FROM CTE;';
+        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
     
-    -- Execute first pass SQL
+    -- Execute dynamic SQL to load data based on PrimaryEmail
     EXEC sp_executesql @DynamicSQL;
-    
-    -- Step 4: Secondary Email Check (Second Pass for Status = 'N' and InsertDataTime = NULL)
+
+    -- Step 4: Update records that are still unmatched using SecondaryEmail
     SET @DynamicSQL = '
-        UPDATE ' + @NewTableName + '
-        SET Status = ''Y'', 
-            InsertDataTime = GETDATE()
-        WHERE LOWER(' + QUOTENAME(@EmailColumnName) + ') IN (
-            SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + '
-        )
-        AND Status = ''N''
-        AND InsertDataTime IS NULL;';
+        UPDATE tgt
+        SET tgt.Status = ''Y'',
+            tgt.InsertDataTime = GETDATE()
+        FROM ' + @NewTableName + ' tgt
+        WHERE tgt.Status = ''N'' -- Unmatched records
+        AND LOWER(tgt.' + QUOTENAME(@EmailColumnName) + ') IN 
+        (SELECT LOWER(map.SecondaryEmail) FROM ' + @MappingTableName + ' map);';
     
-    -- Execute second pass SQL
+    -- Execute dynamic SQL to update unmatched records based on SecondaryEmail
     EXEC sp_executesql @DynamicSQL;
 
-    -- Step 5: FirstName and LastName Check for test3 (Third Pass for Status = 'N' and InsertDataTime = NULL)
-    IF @SourceSchema = 'test3'
-    BEGIN
-        SET @DynamicSQL = '
-            UPDATE ' + @NewTableName + '
-            SET Status = ''Y'', 
-                InsertDataTime = GETDATE()
-            WHERE (LOWER(' + QUOTENAME(@FirstNameColumn) + ') = LOWER(map.FirstName) 
-            OR LOWER(' + QUOTENAME(@LastNameColumn) + ') = LOWER(map.LastName))
-            AND Status = ''N''
-            AND InsertDataTime IS NULL;';
-        
-        -- Execute third pass SQL
-        EXEC sp_executesql @DynamicSQL;
-    END
+    -- Print dynamic SQL for debugging (optional)
+    PRINT 'Dynamic SQL executed for ' + @NewTableName;
 
-    -- Print the executed dynamic SQL for debugging purposes
-    PRINT 'Dynamic SQL executed for primary, secondary, and name matching in ' + @NewTableName;
-    
 END;
 GO
