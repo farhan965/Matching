@@ -1,11 +1,11 @@
-
-
-create PROCEDURE [test].[LoadMatchingDataToStagingT4]
+CREATE PROCEDURE [test].[LoadMatchingDataToStagingT4]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128)
+    @MappingTable NVARCHAR(128),
+    @MappingSchema2 NVARCHAR(128),
+    @MappingTable2 NVARCHAR(128)
 )
 AS
 BEGIN
@@ -16,6 +16,7 @@ BEGIN
     DECLARE @EmailColumnName NVARCHAR(128);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
+    DECLARE @MappingTableName2 NVARCHAR(256) = QUOTENAME(@MappingSchema2) + '.' + QUOTENAME(@MappingTable2);
     DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp_T3');
 
     -- Step 1: Identify the email column
@@ -36,20 +37,20 @@ BEGIN
         WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName1 + ')
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName + ')
                          THEN ''Y'' ELSE ''N'' 
                 END AS Status,
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName1 + ')
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName + ')
                          THEN GETDATE() ELSE NULL 
                 END AS InsertDataTime,
-             map.Id as ID
+                map.Id as ID
         FROM ' + @SourceTableName + ' AS src
         LEFT JOIN ' + @MappingTableName + ' AS map
         ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
         )
         SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
-    
+
     -- Execute dynamic SQL to load data based on PrimaryEmail
     EXEC sp_executesql @DynamicSQL;
 
@@ -57,12 +58,12 @@ BEGIN
     SET @DynamicSQL = '
         UPDATE tgt
         SET tgt.Status = ''Y'',
-            tgt.InsertDataTime = GETDATE(), tgt.Id=
+            tgt.InsertDataTime = GETDATE(),
+            tgt.Id = map2.Id
         FROM ' + @NewTableName + ' tgt
-        WHERE tgt.Status = ''N'' -- Unmatched records
-        AND LOWER(tgt.' + QUOTENAME(@EmailColumnName) + ') IN 
-        (SELECT LOWER(Secondary_Email__c) FROM ' + @MappingTableName1 + ')
-		left join ' + @MappingTableName  + m1 on tgt.Id=m1.Id
+        LEFT JOIN ' + @MappingTableName2 + ' map2
+        ON LOWER(tgt.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map2.Secondary_Email__c)
+        WHERE tgt.Status = ''N'';'; -- Unmatched records
     
     -- Execute dynamic SQL to update unmatched records based on SecondaryEmail
     EXEC sp_executesql @DynamicSQL;
@@ -72,5 +73,3 @@ BEGIN
 
 END;
 GO
-
-
