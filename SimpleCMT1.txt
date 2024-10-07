@@ -35,15 +35,14 @@ BEGIN
         WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email) FROM ' + @MappingTableName + ' map)
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName + ')
                          THEN ''Y'' ELSE ''N'' 
                 END AS Status,
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email) FROM ' + @MappingTableName + ' map)
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(Email) FROM ' + @MappingTableName + ')
                          THEN GETDATE() ELSE NULL 
                 END AS InsertDataTime
             FROM ' + @SourceTableName + ' AS src
-            LEFT JOIN ' + @MappingTableName + ' map ON LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.Email)
         )
         SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
     
@@ -58,7 +57,7 @@ BEGIN
         FROM ' + @NewTableName + ' tgt
         WHERE tgt.Status = ''N'' -- Unmatched records
         AND LOWER(tgt.' + QUOTENAME(@EmailColumnName) + ') IN 
-        (SELECT LOWER(map.Secondary_Email__c) FROM ' + @MappingTableName + ' map);';
+        (SELECT LOWER(Secondary_Email__c) FROM ' + @MappingTableName + ');';
     
     -- Execute dynamic SQL to update unmatched records based on SecondaryEmail
     EXEC sp_executesql @DynamicSQL;
@@ -68,4 +67,3 @@ BEGIN
 
 END;
 GO
-
