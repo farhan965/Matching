@@ -70,4 +70,12 @@ BEGIN
 END;
 GO
 
+ERROR:
+Msg 4104, Level 16, State 1, Line 13
+The multi-part identifier "map.Email" could not be bound.
+Msg 4104, Level 16, State 1, Line 17
+The multi-part identifier "map.Email" could not be bound.
+Msg 208, Level 16, State 1, Line 10
+Invalid object name 'dummy.BAMLORENT_Temp_T3'.
+
 
