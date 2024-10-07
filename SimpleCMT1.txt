@@ -1,6 +1,4 @@
 
-
-
 ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
 (
     @SourceSchema NVARCHAR(128),
@@ -37,14 +35,15 @@ BEGIN
         WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email)  FROM ' + @MappingTableName + ')
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email) FROM ' + @MappingTableName + ' map)
                          THEN ''Y'' ELSE ''N'' 
                 END AS Status,
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email)  FROM ' + @MappingTableName + ')
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email) FROM ' + @MappingTableName + ' map)
                          THEN GETDATE() ELSE NULL 
                 END AS InsertDataTime
             FROM ' + @SourceTableName + ' AS src
+            LEFT JOIN ' + @MappingTableName + ' map ON LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.Email)
         )
         SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
     
@@ -69,13 +68,4 @@ BEGIN
 
 END;
 GO
-
-ERROR:
-Msg 4104, Level 16, State 1, Line 13
-The multi-part identifier "map.Email" could not be bound.
-Msg 4104, Level 16, State 1, Line 17
-The multi-part identifier "map.Email" could not be bound.
-Msg 208, Level 16, State 1, Line 10
-Invalid object name 'dummy.BAMLORENT_Temp_T3'.
-
 
