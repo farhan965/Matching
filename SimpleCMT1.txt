@@ -1,13 +1,12 @@
-ALTER PROCEDURE dbo.LoadMatchingDataToStaging
+
+
+
+ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
 (
     @SourceSchema NVARCHAR(128),
     @SourceTable NVARCHAR(128),
     @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128),
-    @StagingSchema NVARCHAR(128),
-    @StagingTable NVARCHAR(128),
-    @NonMatchingSchema NVARCHAR(128),
-    @JoinCondition NVARCHAR(MAX)
+    @MappingTable NVARCHAR(128)
 )
 AS
 BEGIN
@@ -15,59 +14,60 @@ BEGIN
 
     DECLARE @DynamicSQL NVARCHAR(MAX);
     DECLARE @ColumnNames NVARCHAR(MAX);
+    DECLARE @EmailColumnName NVARCHAR(128);
     DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
     DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @StagingTableName NVARCHAR(256) = QUOTENAME(@StagingSchema) + '.' + QUOTENAME(@StagingTable);
-    DECLARE @NonMatchingTableName NVARCHAR(256) = QUOTENAME(@NonMatchingSchema) + '.' + QUOTENAME(@StagingTable);
+    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp_T3');
 
-    -- Step 1: Dynamically load column names from the source table
+    -- Step 1: Identify the email column
+    SELECT 
+        @EmailColumnName = NAME
+    FROM SYS.COLUMNS 
+    WHERE object_id = OBJECT_ID(@SourceTableName) 
+    AND NAME IN ('FA Email', 'FA-PM Email');
+
+    -- Step 2: Dynamically load all column names from the source table
     SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = @SourceTable 
     AND TABLE_SCHEMA = @SourceSchema;
 
-    -- Step 2: Drop the staging and non-matching tables if they already exist
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @StagingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @StagingTableName + ';';
-    EXEC sp_executesql @DynamicSQL;
-
-    SET @DynamicSQL = 'IF OBJECT_ID(''' + @NonMatchingTableName + ''', ''U'') IS NOT NULL DROP TABLE ' + @NonMatchingTableName + ';';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 3: Create the staging table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @StagingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 4: Create the non-matching table dynamically with the same schema as the source table
-    SET @DynamicSQL = 'SELECT ' + REPLACE(@ColumnNames, 'src.', '') + ' INTO ' + @NonMatchingTableName + ' FROM ' + @SourceTableName + ' WHERE 1=0;';
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Step 5: Insert matching records into the staging table
+    -- Step 3: Create a CTE to first update records based on PrimaryEmail
     SET @DynamicSQL = '
-        INSERT INTO ' + @StagingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-        SELECT ' + @ColumnNames + '
-        FROM ' + @SourceTableName + ' AS src
-        JOIN ' + @MappingTableName + ' AS map
-        ON ' + @JoinCondition + ';';
+        WITH CTE_PrimaryEmail AS (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email)  FROM ' + @MappingTableName + ')
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.Email)  FROM ' + @MappingTableName + ')
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime
+            FROM ' + @SourceTableName + ' AS src
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
+    
+    -- Execute dynamic SQL to load data based on PrimaryEmail
     EXEC sp_executesql @DynamicSQL;
 
-    -- Step 6: Insert non-matching records into the non-matching table
+    -- Step 4: Update records that are still unmatched using SecondaryEmail
     SET @DynamicSQL = '
-        INSERT INTO ' + @NonMatchingTableName + ' (' + REPLACE(@ColumnNames, 'src.', '') + ')
-        SELECT ' + @ColumnNames + '
-        FROM ' + @SourceTableName + ' AS src
-        LEFT JOIN ' + @MappingTableName + ' AS map
-        ON ' + @JoinCondition + '
-        WHERE map.Row_ID IS NULL;';
+        UPDATE tgt
+        SET tgt.Status = ''Y'',
+            tgt.InsertDataTime = GETDATE()
+        FROM ' + @NewTableName + ' tgt
+        WHERE tgt.Status = ''N'' -- Unmatched records
+        AND LOWER(tgt.' + QUOTENAME(@EmailColumnName) + ') IN 
+        (SELECT LOWER(map.Secondary_Email__c) FROM ' + @MappingTableName + ' map);';
+    
+    -- Execute dynamic SQL to update unmatched records based on SecondaryEmail
     EXEC sp_executesql @DynamicSQL;
+
+    -- Print dynamic SQL for debugging (optional)
+    PRINT 'Dynamic SQL executed for ' + @NewTableName;
+
 END;
+GO
 
 
-EXEC dbo.LoadMatchingDataToStaging 
-    @SourceSchema = 'Landing',
-    @SourceTable = 'Central_Orders',
-    @MappingSchema = 'Mapping',
-    @MappingTable = 'Central_Orders',
-    @StagingSchema = 'Staging',
-    @StagingTable = 'Central_Orders',
-    @NonMatchingSchema = 'NonMatching',
-    @JoinCondition = 'src.Row_ID = map.Row_ID AND LOWER(src.Region) = LOWER(map.Region)';
