@@ -1,7 +1,4 @@
-
-
-
-alter PROCEDURE [test].[LoadEmailsToStaging_T1]
+ALTER PROCEDURE [test].[LoadEmailsToStaging_T1]
     @MappingSchema NVARCHAR(128),
     @MappingTable NVARCHAR(128)
 AS
@@ -11,33 +8,35 @@ BEGIN
 
     SET @SQL = '
     WITH cte AS (
-        SELECT distinct CT 
+        SELECT DISTINCT CT 
         FROM ' + @MappingSchema + '.' + @MappingTable + '
-        WHERE [RecordType.DeveloperName] IN (''Ad'', ''Hc'', ''Ho'') and ct is not null),
+        WHERE [RecordType.DeveloperName] IN (''Ad'', ''Hc'', ''Ho'') 
+        AND CT IS NOT NULL
+    ),
     cte2 AS (
         SELECT 
-            c.CT as CD,
+            c.CT AS CD,
             m.Id,
-			m.LastModifiedDate
+            m.LastModifiedDate
         FROM 
-           cte c
-        LEFT JOIN'
-          + @MappingSchema + '.' + @MappingTable + '
-        ON (
-             c.CT = m.CT
-            
-            )),
- 
-    cte3 as (select * from cte2),
-    cte4 as (SELECT CD, max(LastModifiedDate) as LastModifiedDate , max(Id) as ID FROM CTE3 group by CD)
-
-	SELECT * into [Staging].[Mapping_Table_CRD] from CTE4;';
+            cte c
+        LEFT JOIN ' + @MappingSchema + '.' + @MappingTable + ' m
+        ON c.CT = m.CT
+    ),
+    cte3 AS (
+        SELECT * FROM cte2
+    ),
+    cte4 AS (
+        SELECT CD, MAX(LastModifiedDate) AS LastModifiedDate, MAX(Id) AS Id 
+        FROM cte3 
+        GROUP BY CD
+    )
+    
+    SELECT * INTO [Staging].[Mapping_Table_CRD] FROM cte4;';
 
     -- Execute the dynamic SQL
     EXEC sp_executesql @SQL;
 END;
-
-
 GO
 
 
