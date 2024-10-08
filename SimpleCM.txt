@@ -100,6 +100,8 @@ BEGIN
     AND TABLE_SCHEMA = @SourceSchema;
 
     -- Step 3: Create a CTE to first update records based on PrimaryEmail
+
+	IF  @EmailColumnName IS NOT NULL AND @SecondaryEmailColumnName IS NULL
     SET @DynamicSQL = '
         WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
@@ -114,6 +116,49 @@ BEGIN
                 map.Id as ID
         FROM ' + @SourceTableName + ' AS src
         LEFT JOIN ' + @MappingTableName + ' AS map
+        ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
+
+    -- Execute dynamic SQL to load data based on PrimaryEmail
+    EXEC sp_executesql @DynamicSQL;
+	ELSE IF @EmailColumnName IS  NULL AND @SecondaryEmailColumnName IS NOT NULL
+	  SET @DynamicSQL = '
+        WITH CTE_PrimaryEmail AS (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName2 + ')
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName2 + ')
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                map.Id as ID
+        FROM ' + @SourceTableName + ' AS src
+        LEFT JOIN ' + @MappingTableName2 + ' AS map
+        ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
+
+    -- Execute dynamic SQL to load data based on PrimaryEmail
+    EXEC sp_executesql @DynamicSQL;
+
+	ELSE IF @EmailColumnName IS NOT  NULL AND @SecondaryEmailColumnName IS NOT NULL
+	  SET @DynamicSQL = '
+        WITH CTE_PrimaryEmail AS (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
+                         THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
+                         THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                map.Id as ID
+        FROM ' + @SourceTableName + ' AS src
+        LEFT JOIN ' + @MappingTableName2 + ' AS map
         ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
         )
         SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
