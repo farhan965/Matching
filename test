@@ -1,78 +1,43 @@
-ALTER PROCEDURE [test].[LoadMatchingDataToStagingT3]
-(
-    @SourceSchema NVARCHAR(128),
-    @SourceTable NVARCHAR(128),
+
+
+
+alter PROCEDURE [test].[LoadEmailsToStaging_T1]
     @MappingSchema NVARCHAR(128),
-    @MappingTable NVARCHAR(128),
-    @BatchSize INT = 100000  -- Batch size for processing
-)
+    @MappingTable NVARCHAR(128)
 AS
 BEGIN
-    SET NOCOUNT ON;
+    -- Constructing dynamic SQL query
+    DECLARE @SQL NVARCHAR(MAX);
 
-    DECLARE @SourceTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable);
-    DECLARE @MappingTableName NVARCHAR(256) = QUOTENAME(@MappingSchema) + '.' + QUOTENAME(@MappingTable);
-    DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp');
-    DECLARE @RowCount INT = 1;  -- Initialize with a non-zero value for the loop
+    SET @SQL = '
+    WITH cte AS (
+        SELECT distinct CT 
+        FROM ' + @MappingSchema + '.' + @MappingTable + '
+        WHERE [RecordType.DeveloperName] IN (''Ad'', ''Hc'', ''Ho'') and ct is not null),
+    cte2 AS (
+        SELECT 
+            c.CT as CD,
+            m.Id,
+			m.LastModifiedDate
+        FROM 
+           cte c
+        LEFT JOIN'
+          + @MappingSchema + '.' + @MappingTable + '
+        ON (
+             c.CT = m.CT
+            
+            )),
+ 
+    cte3 as (select * from cte2),
+    cte4 as (SELECT CD, max(LastModifiedDate) as LastModifiedDate , max(Id) as ID FROM CTE3 group by CD)
 
-    -- Step 1: Create a new table with all columns from the source and a new Status column
-    DECLARE @DynamicSQL NVARCHAR(MAX);
-    SET @DynamicSQL = '
-    SELECT *, ''N'' AS Status
-    INTO ' + @NewTableName + '
-    FROM ' + @SourceTableName + ';';
+	SELECT * into [Staging].[Mapping_Table_CRD] from CTE4;';
 
-    EXEC sp_executesql @DynamicSQL;
-
-    -- Ensure indexes on temporary table for faster updates
-    SET @DynamicSQL = 'CREATE INDEX idx_email ON ' + @NewTableName + ' (Email);';
-    EXEC sp_executesql @DynamicSQL;
-    
-    -- Step 2: Process in batches for Primary Email
-    WHILE @RowCount > 0
-    BEGIN
-        SET @DynamicSQL = '
-        UPDATE TOP (' + CAST(@BatchSize AS NVARCHAR(10)) + ') tgt
-        SET Status = ''Y''
-        FROM ' + @NewTableName + ' AS tgt
-        WHERE LOWER(tgt.Email) IN (
-            SELECT LOWER(map.Email)
-            FROM ' + @MappingTableName + ' AS map
-        )
-        AND tgt.Status = ''N'';';  -- Only update if Status is still N
-
-        EXEC sp_executesql @DynamicSQL;
-
-        -- Get the number of rows updated in the last operation
-        SET @RowCount = @@ROWCOUNT;
-
-        -- If no rows were updated, exit the loop
-        IF @RowCount = 0 BREAK;
-    END;
-
-    -- Step 3: Update Status based on Secondary Email in batches
-    SET @RowCount = 1;  -- Reset for the next batch
-    WHILE @RowCount > 0
-    BEGIN
-        SET @DynamicSQL = '
-        UPDATE TOP (' + CAST(@BatchSize AS NVARCHAR(10)) + ') tgt
-        SET Status = ''Y''
-        FROM ' + @NewTableName + ' AS tgt
-        WHERE LOWER(tgt.Email) IN (
-            SELECT LOWER(map.Secondary_Email)
-            FROM ' + @MappingTableName + ' AS map
-        )
-        AND tgt.Status = ''N'';';  -- Only update if Status is still N
-
-        EXEC sp_executesql @DynamicSQL;
-
-        -- Get the number of rows updated in the last operation
-        SET @RowCount = @@ROWCOUNT;
-
-        IF @RowCount = 0 BREAK;
-    END;
-
-    -- Optional: If you want to review the newly created table
-    PRINT 'New table created: ' + @NewTableName;
+    -- Execute the dynamic SQL
+    EXEC sp_executesql @SQL;
 END;
-GO  
+
+
+GO
+
+
