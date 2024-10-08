@@ -127,11 +127,11 @@ BEGIN
         WITH CTE_PrimaryEmail AS (
             SELECT ' + @ColumnNames + ',
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName2 + ')
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(sec_Email) FROM ' + @MappingTableName2 + ')
                          THEN ''Y'' ELSE ''N'' 
                 END AS Status,
                 CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName2 + ')
+                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(sec_Email) FROM ' + @MappingTableName2 + ')
                          THEN GETDATE() ELSE NULL 
                 END AS InsertDataTime,
                 map.Id as ID
