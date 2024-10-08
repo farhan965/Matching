@@ -1,4 +1,3 @@
-
 CREATE PROCEDURE [test].[LoadMatchingDataToStagingT5]
 (
     @SourceSchema NVARCHAR(128),
@@ -21,130 +20,161 @@ BEGIN
     DECLARE @MappingTableName2 NVARCHAR(256) = QUOTENAME(@MappingSchema2) + '.' + QUOTENAME(@MappingTable2);
     DECLARE @NewTableName NVARCHAR(256) = QUOTENAME(@SourceSchema) + '.' + QUOTENAME(@SourceTable + '_Temp_T4');
 
-    -- Step 1: Identify the email column
-
+    -- Step 1: Check the SourceSchema
     IF @SourceSchema = 'test'
     BEGIN
+        -- Step 2: Dynamically select columns for the 'test' schema
+        SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = @SourceTable
+        AND TABLE_SCHEMA = @SourceSchema;
+
+        -- Identify the primary email column
         SELECT @EmailColumnName = NAME
         FROM SYS.COLUMNS 
         WHERE object_id = OBJECT_ID(@SourceTableName) 
         AND NAME IN ('Email_p', 'Email_p1');
-        
+
+        -- Ensure that we found an email column
         IF @EmailColumnName IS NULL
         BEGIN
             RAISERROR('No Email column found in the source table.', 16, 1);
             RETURN;
         END
+
+        -- Step 3: Create the CTE and dynamically build the SQL for the 'test' schema
+        SET @DynamicSQL = '
+        WITH CTE_TestSchema AS (
+            SELECT ' + @ColumnNames + ',
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+                    THEN ''Y'' ELSE ''N'' 
+                END AS Status,
+                CASE 
+                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+                    THEN GETDATE() ELSE NULL 
+                END AS InsertDataTime,
+                map.Id as ID
+            FROM ' + @SourceTableName + ' AS src
+            LEFT JOIN ' + @MappingTableName + ' AS map
+            ON LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email)
+        )
+        SELECT * INTO ' + @NewTableName + ' FROM CTE_TestSchema;';
+        
+        -- Step 4: Execute the dynamic SQL to create the table for the 'test' schema
+        EXEC sp_executesql @DynamicSQL;
+
+        -- For debugging: Print the dynamic SQL
+        PRINT 'Dynamic SQL executed for table: ' + @NewTableName;
     END
+
+    -- Handle SourceSchema = 'test2'
     ELSE IF @SourceSchema = 'test2'
     BEGIN
+        -- Step 2: Dynamically select columns for the 'test2' schema
+        SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = @SourceTable
+        AND TABLE_SCHEMA = @SourceSchema;
+
+        -- Identify primary and secondary email columns
         SELECT @EmailColumnName = NAME
         FROM SYS.COLUMNS 
         WHERE object_id = OBJECT_ID(@SourceTableName) 
         AND NAME IN ('Email1', 'Email2');
-        
+
         SELECT @SecondaryEmailColumnName = NAME
         FROM SYS.COLUMNS 
         WHERE object_id = OBJECT_ID(@SourceTableName) 
         AND NAME IN ('sec Email', 'sec Email St');
-    END
-    
-    -- Step 2: Dynamically load all column names from the source table
-    SELECT @ColumnNames = STRING_AGG('src.' + QUOTENAME(COLUMN_NAME), ', ')
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_NAME = @SourceTable 
-    AND TABLE_SCHEMA = @SourceSchema;
 
-    -- For debugging: Print the dynamic SQL for column names
-    PRINT 'Column Names: ' + @ColumnNames;
+        -- Step 3: Create the CTE based on the available email columns
+        IF @EmailColumnName IS NOT NULL AND @SecondaryEmailColumnName IS NULL
+        BEGIN
+            -- Create CTE based on PrimaryEmail
+            SET @DynamicSQL = '
+            WITH CTE_PrimaryEmail AS (
+                SELECT ' + @ColumnNames + ',
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+                        THEN ''Y'' ELSE ''N'' 
+                    END AS Status,
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(map.New_Email) FROM ' + @MappingTableName + ')
+                        THEN GETDATE() ELSE NULL 
+                    END AS InsertDataTime,
+                    map.Id as ID
+                FROM ' + @SourceTableName + ' AS src
+                LEFT JOIN ' + @MappingTableName + ' AS map
+                ON LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email)
+            )
+            SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
 
-    -- Step 3: Handle data based on available email columns
-    IF @EmailColumnName IS NOT NULL AND @SecondaryEmailColumnName IS NULL
-    BEGIN
-        SET @DynamicSQL = '
-        WITH CTE_PrimaryEmail AS (
-            SELECT ' + @ColumnNames + ',
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
-                    THEN ''Y'' ELSE ''N'' 
-                END AS Status,
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
-                    THEN GETDATE() ELSE NULL 
-                END AS InsertDataTime,
-                map.Id as ID
-            FROM ' + @SourceTableName + ' AS src
-            LEFT JOIN ' + @MappingTableName + ' AS map
-            ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
-        )
-        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
-        
-        -- Execute the dynamic SQL for Primary Email
-        EXEC sp_executesql @DynamicSQL;
-    END
-    ELSE IF @EmailColumnName IS NULL AND @SecondaryEmailColumnName IS NOT NULL
-    BEGIN
-        SET @DynamicSQL = '
-        WITH CTE_SecondaryEmail AS (
-            SELECT ' + @ColumnNames + ',
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(sec_Email) FROM ' + @MappingTableName2 + ')
-                    THEN ''Y'' ELSE ''N'' 
-                END AS Status,
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(sec_Email) FROM ' + @MappingTableName2 + ')
-                    THEN GETDATE() ELSE NULL 
-                END AS InsertDataTime,
-                map2.Id as ID
-            FROM ' + @SourceTableName + ' AS src
-            LEFT JOIN ' + @MappingTableName2 + ' AS map2
-            ON (LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') = LOWER(map2.sec_Email))
-        )
-        SELECT * INTO ' + @NewTableName + ' FROM CTE_SecondaryEmail;';
-        
-        -- Execute the dynamic SQL for Secondary Email
-        EXEC sp_executesql @DynamicSQL;
-    END
-    ELSE IF @EmailColumnName IS NOT NULL AND @SecondaryEmailColumnName IS NOT NULL
-    BEGIN
-        -- First handle Primary Email
-        SET @DynamicSQL = '
-        WITH CTE_PrimaryEmail AS (
-            SELECT ' + @ColumnNames + ',
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
-                    THEN ''Y'' ELSE ''N'' 
-                END AS Status,
-                CASE 
-                    WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
-                    THEN GETDATE() ELSE NULL 
-                END AS InsertDataTime,
-                map.Id as ID
-            FROM ' + @SourceTableName + ' AS src
-            LEFT JOIN ' + @MappingTableName + ' AS map
-            ON (LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email))
-        )
-        SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;';
-        
-        EXEC sp_executesql @DynamicSQL;
+            -- Execute the dynamic SQL
+            EXEC sp_executesql @DynamicSQL;
+        END
+        ELSE IF @EmailColumnName IS NULL AND @SecondaryEmailColumnName IS NOT NULL
+        BEGIN
+            -- Create CTE based on SecondaryEmail
+            SET @DynamicSQL = '
+            WITH CTE_SecondaryEmail AS (
+                SELECT ' + @ColumnNames + ',
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(map2.sec_Email) FROM ' + @MappingTableName2 + ')
+                        THEN ''Y'' ELSE ''N'' 
+                    END AS Status,
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') IN (SELECT LOWER(map2.sec_Email) FROM ' + @MappingTableName2 + ')
+                        THEN GETDATE() ELSE NULL 
+                    END AS InsertDataTime,
+                    map2.Id as ID
+                FROM ' + @SourceTableName + ' AS src
+                LEFT JOIN ' + @MappingTableName2 + ' AS map2
+                ON LOWER(src.' + QUOTENAME(@SecondaryEmailColumnName) + ') = LOWER(map2.sec_Email)
+            )
+            SELECT * INTO ' + @NewTableName + ' FROM CTE_SecondaryEmail;';
 
-        -- Then handle Secondary Email for unmatched records
-        SET @DynamicSQL = '
-        UPDATE tgt
-        SET tgt.Status = ''Y'',
-            tgt.InsertDataTime = GETDATE(),
-            tgt.Id = map2.Id
-        FROM ' + @NewTableName + ' tgt
-        INNER JOIN ' + @MappingTableName2 + ' map2
-        ON LOWER(tgt.' + QUOTENAME(@SecondaryEmailColumnName) + ') = LOWER(map2.sec_Email)
-        WHERE tgt.Status = ''N'';';
-        
-        -- Execute dynamic SQL for unmatched records
-        EXEC sp_executesql @DynamicSQL;
-    END
+            -- Execute the dynamic SQL
+            EXEC sp_executesql @DynamicSQL;
+        END
+        ELSE IF @EmailColumnName IS NOT NULL AND @SecondaryEmailColumnName IS NOT NULL
+        BEGIN
+            -- Create CTE based on both PrimaryEmail and SecondaryEmail
+            SET @DynamicSQL = '
+            WITH CTE_PrimaryEmail AS (
+                SELECT ' + @ColumnNames + ',
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
+                        THEN ''Y'' ELSE ''N'' 
+                    END AS Status,
+                    CASE 
+                        WHEN LOWER(src.' + QUOTENAME(@EmailColumnName) + ') IN (SELECT LOWER(New_Email) FROM ' + @MappingTableName + ')
+                        THEN GETDATE() ELSE NULL 
+                    END AS InsertDataTime,
+                    map.Id as ID
+                FROM ' + @SourceTableName + ' AS src
+                LEFT JOIN ' + @MappingTableName + ' AS map
+                ON LOWER(src.' + QUOTENAME(@EmailColumnName) + ') = LOWER(map.New_Email)
+            )
+            SELECT * INTO ' + @NewTableName + ' FROM CTE_PrimaryEmail;
+            
+            -- Update records based on SecondaryEmail for unmatched entries
+            UPDATE tgt
+            SET tgt.Status = ''Y'',
+                tgt.InsertDataTime = GETDATE(),
+                tgt.Id = map2.Id
+            FROM ' + @NewTableName + ' tgt
+            INNER JOIN ' + @MappingTableName2 + ' map2
+            ON LOWER(tgt.' + QUOTENAME(@SecondaryEmailColumnName) + ') = LOWER(map2.sec_Email)
+            WHERE tgt.Status = ''N'';';
 
-    -- For debugging: Print the final dynamic SQL execution
-    PRINT 'Dynamic SQL executed for table: ' + @NewTableName;
+            -- Execute the dynamic SQL
+            EXEC sp_executesql @DynamicSQL;
+        END
+
+        -- For debugging: Print the final dynamic SQL
+        PRINT 'Dynamic SQL executed for table: ' + @NewTableName;
+    END
 
 END;
 GO
