@@ -1,0 +1,40 @@
+ALTER PROCEDURE [test].[LoadEmailsToStaging_T1]
+    @MappingSchema NVARCHAR(128),
+    @MappingTable NVARCHAR(128)
+AS
+BEGIN
+    -- Constructing dynamic SQL query
+    DECLARE @SQL NVARCHAR(MAX);
+
+    SET @SQL = '
+    WITH cte AS (
+        SELECT DISTINCT CT 
+        FROM ' + @MappingSchema + '.' + @MappingTable + ' WITH (NOLOCK)
+        WHERE [RecordType.DeveloperName] IN (''Ad'', ''Hc'', ''Ho'') 
+        AND CT IS NOT NULL
+    ),
+    cte2 AS (
+        SELECT 
+            c.CT AS CD,
+            m.Id,
+            m.LastModifiedDate
+        FROM 
+            cte c
+        LEFT JOIN ' + @MappingSchema + '.' + @MappingTable + ' m WITH (NOLOCK)
+        ON c.CT = m.CT
+    ),
+    cte3 AS (
+        SELECT * FROM cte2
+    ),
+    cte4 AS (
+        SELECT CD, MAX(LastModifiedDate) AS LastModifiedDate, MAX(Id) AS Id 
+        FROM cte3 
+        GROUP BY CD
+    )
+    
+    SELECT * INTO [Staging].[Mapping_Table_CRD] FROM cte4;';
+
+    -- Execute the dynamic SQL
+    EXEC sp_executesql @SQL;
+END;
+GO
